@@ -102,6 +102,7 @@ function loadConfig() {
   return {
     defaultTheme: themes.has(raw['default-theme']) ? raw['default-theme'] : 'vista',
     authMode: authModes.has(raw['auth-mode']) ? raw['auth-mode'] : 'account',
+    trustedProxies: raw['trusted-proxies'] === undefined ? [] : raw['trusted-proxies'],
   };
 }
 

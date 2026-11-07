@@ -150,6 +150,7 @@ function setAccount(account) {
       dialogBody.replaceChildren();
     }
     closeContextMenu();
+    resetTransfers();
     $('#categories').replaceChildren();
     closePreview();
     $('#breadcrumbs').replaceChildren();
@@ -172,6 +173,7 @@ function showPassphraseScreen(message = '') {
   $('#workspace').hidden = true;
   $('#account-controls').replaceChildren();
   closeContextMenu();
+  resetTransfers();
   closePreview();
   const input = $('#passphrase-input');
   input.value = '';
@@ -188,6 +190,7 @@ function showIpScreen(message = '') {
   $('#workspace').hidden = true;
   $('#account-controls').replaceChildren();
   closeContextMenu();
+  resetTransfers();
   closePreview();
   if (dialog.open) dialog.close();
   const registered = state.ipRegistered;
@@ -338,15 +341,157 @@ function action(label, glyph, callback) {
   return button;
 }
 
+const transferWidget = $('#transfer-widget');
+const transferList = $('#transfer-list');
+const clearTransfers = $('#clear-transfers');
+function resetTransfers() {
+  transferList.replaceChildren();
+  clearTransfers.hidden = true;
+  transferWidget.hidden = true;
+}
+clearTransfers.addEventListener('click', () => {
+  for (const row of transferList.querySelectorAll('[data-finished]')) row.remove();
+  clearTransfers.hidden = true;
+  transferWidget.hidden = !transferList.childElementCount;
+});
+
+function timeRemaining(fraction, elapsed) {
+  if (fraction >= 1) return '';
+  if (fraction <= 0 || elapsed < 500) return ' · Est. time calculating…';
+  const seconds = Math.max(1, Math.ceil(elapsed / 1000 * (1 - fraction) / fraction));
+  if (seconds >= 3600) return ` · Est. ${Math.ceil(seconds / 3600)} hr left`;
+  if (seconds >= 60) return ` · Est. ${Math.ceil(seconds / 60)} min left`;
+  return ` · Est. ${seconds} sec left`;
+}
+
+function startTransfer(name, initial) {
+  const row = document.createElement('li');
+  const title = document.createElement('strong');
+  title.textContent = name;
+  const bar = document.createElement('progress');
+  bar.max = 1;
+  bar.setAttribute('aria-label', `${name} progress`);
+  const detail = document.createElement('p');
+  row.append(title, bar, detail);
+  transferList.prepend(row);
+  transferWidget.hidden = false;
+
+  function update(message, fraction = null, elapsed = 0) {
+    if (fraction === null) {
+      bar.removeAttribute('value');
+      detail.textContent = message;
+    } else {
+      bar.value = fraction;
+      detail.textContent = message + timeRemaining(fraction, elapsed);
+    }
+  }
+
+  update(initial);
+  return {
+    update,
+    finish(message, failed = false) {
+      if (!row.isConnected) return;
+      row.dataset.finished = '';
+      if (failed) row.dataset.failed = '';
+      bar.hidden = failed;
+      update(message, failed ? null : 1);
+      clearTransfers.hidden = false;
+      for (const old of [...transferList.querySelectorAll('[data-finished]')].slice(8)) old.remove();
+    },
+  };
+}
+
+async function followDownload(id, transfer) {
+  const started = Date.now();
+  try {
+    while (true) {
+      const response = await fetch(`/api/drive/transfers/${id}`);
+      let delay = 250;
+      if (response.ok) {
+        const { phase, progress, elapsed, error } = await response.json();
+        if (phase === 'done') return transfer.finish('Download sent to your browser.');
+        if (phase === 'error') return transfer.finish(error || 'Download failed.', true);
+        const label = phase === 'compressing' ? 'Compressing folder'
+          : phase === 'downloading' ? 'Downloading' : 'Preparing download…';
+        transfer.update(label, progress, elapsed);
+        if (phase === 'downloading') delay = 750;
+      } else if (response.status !== 404 || Date.now() - started >= 8000) {
+        return transfer.finish('Download progress is unavailable. Check your browser’s downloads.', true);
+      }
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+  } catch {
+    transfer.finish('Could not check download progress.', true);
+  }
+}
+
 function downloadLink(item) {
   const link = document.createElement('a');
+  const folder = item.kind === 'folder';
   link.className = 'icon-button';
-  link.href = `/api/drive/files/${encodeURIComponent(item.id)}/download`;
-  link.download = item.name;
+  link.href = `/api/drive/${folder ? 'folders' : 'files'}/${encodeURIComponent(item.id)}/download`;
+  link.download = folder ? `${item.name}.zip` : item.name;
   link.innerHTML = icon('download');
   link.setAttribute('aria-label', `Download ${item.name}`);
   link.title = 'Download';
+  link.addEventListener('click', (event) => {
+    if (event.defaultPrevented || event.ctrlKey || event.shiftKey || event.altKey || event.metaKey) return;
+    event.preventDefault();
+    const id = Array.from(crypto.getRandomValues(new Uint8Array(16)), (byte) => byte.toString(16).padStart(2, '0')).join('');
+    const transfer = startTransfer(link.download, folder ? 'Preparing folder ZIP…' : 'Preparing download…');
+    const frame = document.createElement('iframe');
+    frame.name = `download-${id}`;
+    frame.hidden = true;
+    document.body.append(frame);
+    const download = document.createElement('a');
+    download.href = `${link.href}?transfer=${id}`;
+    download.download = link.download;
+    download.target = frame.name;
+    download.click();
+    followDownload(id, transfer).finally(() => setTimeout(() => frame.remove(), 5000));
+  });
   return link;
+}
+
+async function copyShareLink(item) {
+  showDialog('Share download', `
+    <p class="dialog-copy">Anyone who can reach FireSend can use this link to download the shared item.</p>
+    <div class="dialog-form">
+      <label>Share link<input id="share-url" type="url" readonly></label>
+      <p id="share-status" class="hint" role="status">Creating link…</p>
+      <div class="dialog-actions"><button id="copy-share-url" type="button" class="button primary" disabled>Copy link</button></div>
+    </div>`);
+  const input = $('#share-url');
+  const status = $('#share-status');
+  const button = $('#copy-share-url');
+  async function copy() {
+    let copied = false;
+    input.focus();
+    input.select();
+    try {
+      copied = document.execCommand('copy');
+    } catch {}
+    if (!copied && navigator.clipboard) {
+      try {
+        await navigator.clipboard.writeText(input.value);
+        copied = true;
+      } catch {}
+    }
+    status.textContent = copied ? 'Link copied.' : 'Select and copy the link above.';
+  }
+  try {
+    const { path } = await request(`/items/${encodeURIComponent(item.id)}/share`, { method: 'POST' });
+    if (!input.isConnected || !dialog.open) return;
+    input.value = new URL(path, location.origin).href;
+    button.disabled = false;
+    button.addEventListener('click', copy);
+    await copy();
+  } catch (error) {
+    if (input.isConnected && dialog.open) {
+      status.textContent = '';
+      showError(dialogError, error.message);
+    }
+  }
 }
 
 function closePreview({ restoreFocus = false } = {}) {
@@ -838,7 +983,7 @@ function renderItem(item) {
   size.textContent = item.kind === 'file' ? sizeLabel(item.size) : '—';
   const actions = document.createElement('div');
   actions.className = 'row-actions';
-  if (item.kind === 'file') actions.append(downloadLink(item));
+  actions.append(downloadLink(item), action(`Copy share link for ${item.name}`, 'link', () => copyShareLink(item)));
   if (state.account) {
     actions.append(
       action(`Rename ${item.name}`, 'rename', () => nameDialog('rename', item)),
@@ -879,7 +1024,7 @@ function renderParentRow(parent) {
 function renderFolder(previous) {
   const folder = state.folder;
   $('#new-folder').disabled = !folder;
-  $('#upload-button').disabled = !folder || state.uploading;
+  updateUploadButtons();
   $('#manage-categories').disabled = !folder;
   if (!folder) return;
 
@@ -1166,10 +1311,11 @@ function openContextMenu(anchor, groups, event) {
 function showItemMenu(item, row, anchor, event) {
   const open = item.kind === 'folder'
     ? [{ label: 'Open folder', glyph: 'folder', onClick: () => row.querySelector('.item-name a').click() }]
-    : [
-        { label: 'Preview', glyph: 'file', onClick: () => openPreview(item, row.querySelector('.preview-trigger')) },
-        { label: 'Download', glyph: 'download', link: downloadLink(item) },
-      ];
+    : [{ label: 'Preview', glyph: 'file', onClick: () => openPreview(item, row.querySelector('.preview-trigger')) }];
+  open.push(
+    { label: 'Download', glyph: 'download', link: downloadLink(item) },
+    { label: 'Copy share link', glyph: 'link', onClick: () => copyShareLink(item) },
+  );
   openContextMenu(anchor, [
     open,
     [
@@ -1380,13 +1526,19 @@ function moveDialog(item) {
   browseCategories();
 }
 
-function uploadFile(folderId, file, progress) {
+function updateUploadButtons() {
+  const disabled = !state.folder || state.uploading;
+  $('#upload-button').disabled = disabled;
+  $('#upload-folder-button').disabled = disabled;
+}
+
+function uploadFile(folderId, file, onProgress) {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open('POST', `/api/drive/folders/${folderId}/files`);
     xhr.responseType = 'json';
     xhr.upload.addEventListener('progress', (event) => {
-      if (event.lengthComputable) progress.value = event.loaded / event.total;
+      if (event.lengthComputable) onProgress(event.loaded / event.total);
     });
     xhr.addEventListener('load', () => {
       if (xhr.status === 201) resolve();
@@ -1399,33 +1551,144 @@ function uploadFile(folderId, file, progress) {
   });
 }
 
-async function uploadFiles(files) {
-  if (!state.folder || !files.length || state.uploading) return;
-  const { id } = state.folder;
-  state.uploading = true;
-  $('#upload-button').disabled = true;
-  showError(pageError);
-  const progress = $('#upload-progress');
-  const status = $('#upload-status');
-  const errors = [];
-  let completed = 0;
+function pickedFiles(files) {
+  return Array.from(files, (file) => ({ path: (file.webkitRelativePath || file.name).split('/'), file }));
+}
 
-  for (const file of files) {
-    progress.value = 0;
-    $('#upload-label').textContent = `Uploading ${file.name}`;
-    status.hidden = false;
-    try {
-      await uploadFile(id, file, progress);
-      completed++;
-    } catch (error) {
-      errors.push(`${file.name} — ${error.message}`);
+function captureDropItems(transfer) {
+  const items = [];
+  for (const item of Array.from(transfer.items || [])) {
+    if (item.kind !== 'file') continue;
+    const getEntry = item.getAsEntry || item.webkitGetAsEntry;
+    const entry = getEntry?.call(item);
+    if (entry) {
+      items.push({ entry });
+    } else {
+      const file = item.getAsFile();
+      if (file) items.push({ file });
     }
   }
-  state.uploading = false;
-  status.hidden = true;
-  $('#upload-button').disabled = !state.folder;
-  if (completed) notice(`Uploaded ${completed} ${completed === 1 ? 'file' : 'files'}.`);
-  if (errors.length) showError(pageError, errors.join(' '));
+  return items.length ? items : Array.from(transfer.files, (file) => ({ file }));
+}
+
+async function* readDroppedEntry(entry, parent = []) {
+  const path = [...parent, entry.name];
+  try {
+    if (entry.isFile) {
+      const file = await new Promise((resolve, reject) => entry.file(resolve, reject));
+      yield { path, file };
+    } else if (entry.isDirectory) {
+      yield { path };
+      const reader = entry.createReader();
+      let children;
+      do {
+        children = await new Promise((resolve, reject) => reader.readEntries(resolve, reject));
+        for (const child of children) yield* readDroppedEntry(child, path);
+      } while (children.length);
+    }
+  } catch (error) {
+    yield { path, error: error.message || 'This item could not be read.' };
+  }
+}
+
+async function* droppedFiles(items) {
+  for (const { entry, file } of items) {
+    if (entry) yield* readDroppedEntry(entry);
+    else yield { path: [file.name], file };
+  }
+}
+
+async function uploadBatch(selection) {
+  if (!state.account || !state.folder || state.uploading) return;
+  const { id } = state.folder;
+  state.uploading = true;
+  updateUploadButtons();
+  showError(pageError);
+  const transfer = startTransfer('Upload', 'Reading files and folders…');
+  const errors = [];
+  const entries = [];
+  const folders = new Map([['', Promise.resolve(id)]]);
+  let uploaded = 0;
+  let created = 0;
+  let processed = 0;
+  let progressTotal = 0;
+  let cursor = 0;
+
+  function ensureFolder(parts) {
+    const key = parts.join('/');
+    if (!folders.has(key)) {
+      const folder = ensureFolder(parts.slice(0, -1)).then(async (parent) => {
+        const result = await request(`/folders/${encodeURIComponent(parent)}`, {
+          method: 'POST', body: { name: parts.at(-1), reuseExisting: true },
+        });
+        if (!result.reused) created++;
+        return result.id;
+      });
+      folders.set(key, folder);
+    }
+    return folders.get(key);
+  }
+
+  try {
+    for await (const entry of selection) {
+      if (entry.error) errors.push(`${entry.path.join('/')} — ${entry.error}`);
+      else entries.push(entry);
+    }
+    const files = entries.filter(({ file }) => file);
+    const fileCount = files.length;
+    const total = files.reduce((sum, { file }) => sum + Math.max(file.size, 1), 0);
+    const started = Date.now();
+    const updateLabel = () => {
+      if (!fileCount) transfer.update('Creating folders…');
+      else transfer.update(`Uploading · ${processed} of ${fileCount} files`, Math.min(progressTotal / total, 1), Date.now() - started);
+    };
+    updateLabel();
+
+    async function worker() {
+      while (cursor < entries.length) {
+        const { path, file } = entries[cursor++];
+        const weight = file ? Math.max(file.size, 1) : 0;
+        let transferred = 0;
+        try {
+          const destination = await ensureFolder(file ? path.slice(0, -1) : path);
+          if (file) {
+            await uploadFile(destination, file, (amount) => {
+              const loaded = amount * weight;
+              progressTotal += loaded - transferred;
+              transferred = loaded;
+              updateLabel();
+            });
+            uploaded++;
+          }
+        } catch (error) {
+          errors.push(`${path.join('/')} — ${error.message}`);
+        } finally {
+          if (file) {
+            processed++;
+            progressTotal += weight - transferred;
+            updateLabel();
+          }
+        }
+      }
+    }
+
+    await Promise.all(Array.from({ length: Math.min(3, entries.length) }, worker));
+  } catch (error) {
+    errors.push(error.message || 'The selection could not be read.');
+  } finally {
+    state.uploading = false;
+    updateUploadButtons();
+  }
+  const results = [];
+  if (uploaded) results.push(`Uploaded ${uploaded} ${uploaded === 1 ? 'file' : 'files'}.`);
+  if (created) results.push(`Created ${created} ${created === 1 ? 'folder' : 'folders'}.`);
+  notice(results.join(' '));
+  transfer.finish(errors.length ? `Upload finished with ${errors.length} ${errors.length === 1 ? 'error' : 'errors'}.`
+    : results.join(' ') || 'Upload complete.', Boolean(errors.length));
+  if (errors.length) {
+    const extra = errors.length > 5 ? ` And ${errors.length - 5} more.` : '';
+    showError(pageError, errors.slice(0, 5).join(' ') + extra);
+  }
   if (state.folder?.id === id) await loadFolder(id, { refresh: true });
 }
 
@@ -1674,23 +1937,32 @@ window.addEventListener('scroll', () => closeContextMenu({ restoreFocus: true })
 $('#manage-categories').addEventListener('click', openCategoryManager);
 $('#new-folder').addEventListener('click', () => nameDialog('create'));
 const picker = $('#file-picker');
-$('#upload-button').addEventListener('click', () => picker.click());
-picker.addEventListener('change', () => {
-  const files = [...picker.files];
-  picker.value = '';
-  uploadFiles(files);
-});
+const folderPicker = $('#folder-picker');
+for (const [button, input] of [[$('#upload-button'), picker], [$('#upload-folder-button'), folderPicker]]) {
+  button.addEventListener('click', () => input.click());
+  input.addEventListener('change', () => {
+    const files = pickedFiles(input.files);
+    input.value = '';
+    if (files.length) uploadBatch(files);
+  });
+}
 const panel = $('.file-panel');
 panel.addEventListener('contextmenu', (event) => {
   if (!state.folder) return;
   event.preventDefault();
   const entries = [{ label: 'New folder', glyph: 'folder-plus', onClick: () => nameDialog('create') }];
-  if (!state.uploading) entries.push({ label: 'Upload files', glyph: 'upload', onClick: () => picker.click() });
+  if (!state.uploading) {
+    entries.push(
+      { label: 'Upload files', glyph: 'upload', onClick: () => picker.click() },
+      { label: 'Upload folder', glyph: 'upload', onClick: () => folderPicker.click() },
+    );
+  }
   openContextMenu($('#new-folder'), [entries], event);
 });
 let fileDragDepth = 0;
 const dropHint = $('#drop-hint');
-const hasFiles = (event) => event.dataTransfer?.types.includes('Files');
+const hasFiles = (event) => event.dataTransfer?.types.includes('Files')
+  || Array.from(event.dataTransfer?.items || []).some(({ kind }) => kind === 'file');
 const canDropFiles = () => Boolean(state.account && state.folder && !state.uploading);
 const itemDragType = 'application/x-firesend-item';
 let draggedItem;
@@ -1778,7 +2050,11 @@ document.addEventListener('drop', (event) => {
   }
   if (!hasFiles(event)) return;
   event.preventDefault();
-  if (canDropFiles()) uploadFiles([...event.dataTransfer.files]);
+  if (canDropFiles()) {
+    const items = captureDropItems(event.dataTransfer);
+    if (items.length) uploadBatch(droppedFiles(items));
+    else showError(pageError, 'The browser could not read the dropped files or folders.');
+  }
 });
 document.addEventListener('dragend', () => {
   clearFileDrag();

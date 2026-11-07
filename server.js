@@ -19,7 +19,16 @@ try {
   if (error.code !== 'ENOENT') console.error('Could not read .env:', error.message);
 }
 
-const { defaultTheme, authMode } = loadConfig();
+const { defaultTheme, authMode, trustedProxies } = loadConfig();
+try {
+  if (!Array.isArray(trustedProxies) || trustedProxies.some((proxy) => typeof proxy !== 'string' || !proxy.trim())) {
+    throw new Error('Expected an array of proxy IP addresses or CIDRs.');
+  }
+  app.set('trust proxy', trustedProxies.map((proxy) => proxy.trim()));
+} catch (error) {
+  console.error(`Invalid trusted-proxies in config.jsonc. ${error.message}`);
+  process.exit(1);
+}
 const passphrase = process.env.PASSPHRASE || '';
 if (authMode === 'passphrase' && !passphrase) {
   console.error('PASSPHRASE must be set in .env (or the environment) when auth-mode is "passphrase".');
@@ -72,6 +81,7 @@ app.use('/api', (req, res, next) => {
 app.use(express.json({ limit: '2kb' }));
 const drive = createDriveRouter({ data, uploads, upload, removeBlob, authMode, passphrase });
 app.use('/api/drive', drive.router);
+app.get('/share/:token', drive.downloadShare);
 
 app.get('/config.js', (req, res) => {
   res.type('application/javascript');

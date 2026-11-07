@@ -17,6 +17,12 @@ After signing in, members can browse the drive, preview files, upload, download,
 
 Drag a drive item onto another folder to move it there. In a subfolder, drop an item on the `..` row to move it up one level.
 
+To upload, drop files and folders from your computer into the drive together, or use **Upload files** and **Upload folder**. A drop preserves nested folders, including empty ones. Uploads merge into matching folders and report duplicate files without overwriting them.
+
+Use **Download** on a file or folder. FireSend packs folders into ZIP files with 7-Zip at medium compression. The **Transfers** widget shows upload, compression, and download progress with an estimated time remaining as data becomes available. ZIP entries with Windows-incompatible names use safe substitutes.
+
+Use **Copy share link** on a file or folder to create a direct download link. Anyone who can reach the FireSend server and has the link can download without signing in. To share with another device, open FireSend using the host's network address before copying the link. Folder links download a ZIP of the folder's current contents, and deleting the shared item disables its links.
+
 Images, audio, video, text, and PDFs can be previewed. Source files such as JavaScript, Python, and TypeScript get syntax coloring, and multi-page PDFs have page navigation. COLLADA (`.dae`), Wavefront (`.obj`), and FBX (`.fbx`) models open in a rotatable 3D view. FBX models can use embedded textures. Keep external textures and any OBJ material files (`.mtl`) in the same drive folder. `.zip` and `.7z` archives open as a browsable file list, and previewable entries can be opened from there. Archive browsing uses the 7-Zip command-line tool on the host. Set `SEVEN_ZIP_PATH` if `7z` is not in a standard location.
 
 Drag the left edge of the preview drawer to resize it, or click outside to close it. The drive list shows small image and video thumbnails. Video thumbnails use a frame 25% into the clip when its duration is available. FFmpeg generates these thumbnails and browser-compatible previews for uploaded formats such as MOV, MKV, AVI, FLAC, and TIFF. The first preview of a large file can take time to generate. The server uses FFmpeg and FFprobe from `tools/ffmpeg/bin` when present, or from the host's PATH. A fresh checkout needs its own copy of those tools.
@@ -31,7 +37,8 @@ Edit `config.jsonc` in the project folder and restart the server:
   "default-theme": "vista",
 
   // How people authenticate to the drive.
-  "auth-mode": "account"
+  "auth-mode": "account",
+  "trusted-proxies": []
 }
 ```
 
@@ -42,6 +49,36 @@ Edit `config.jsonc` in the project folder and restart the server:
   - `ip`: the first visit from a network address registers a friendly name and passphrase. Later visits from the same address only ask for that passphrase. Sessions are tied to the address, so a different address registers its own name and passphrase.
 
 Restart the server after changing the file.
+
+### NGINX reverse proxy
+
+Add the IP addresses or CIDRs of your reverse proxies to `trusted-proxies`. The default empty list uses the direct connection address.
+
+For IP mode with NGINX and FireSend on the same host, add these settings to `config.jsonc`.
+
+```jsonc
+{
+  "auth-mode": "ip",
+  "trusted-proxies": ["127.0.0.1"]
+}
+```
+
+Put this location block in the NGINX server block that serves FireSend.
+
+```nginx
+location / {
+    proxy_pass http://127.0.0.1:3001;
+    proxy_set_header Host $http_host;
+    proxy_set_header X-Forwarded-Host $http_host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-For $remote_addr;
+    proxy_set_header X-Real-IP $remote_addr;
+}
+```
+
+Restart FireSend and reload NGINX. The FireSend sign-in screen should show the client's IP address.
+
+Use NGINX's actual address as seen by FireSend if it runs on another machine or in a container. FireSend reads `X-Forwarded-For` through the trusted proxy chain and uses `X-Real-IP` as a fallback when that header is absent. IP-mode registrations are tied to the address on record. A person previously registered under the proxy's address will need to register from their own forwarded address.
 
 ## Set up an admin
 
@@ -54,6 +91,8 @@ npm run grant-admin -- username
 ```
 
 The command enables the account and grants it admin access. Sign in to see the Admin panel button. Admins can enable newly registered accounts, disable, re-enable, or delete member accounts, and view storage usage. Disabling a member revokes their sessions and blocks access until they are enabled again.
+
+In IP mode, use the connecting address shown on the sign-in screen in place of the username. The address must be registered first. This lets you grant admin access to a new client address after setting up a reverse proxy.
 
 Use **Settings → Sign-in** to change your password or passphrase. In shared-passphrase mode, `PASSPHRASE` supplies the initial value. Changes made in Settings are stored with the drive data and sign out everyone else using that shared passphrase.
 

@@ -76,7 +76,9 @@
         <div class="toolbar">
           <button id="new-folder" class="button" type="button" disabled><svg aria-hidden="true"><use href="/icons.svg#folder-plus"></use></svg> New folder</button>
           <button id="upload-button" class="button primary" type="button" disabled><svg aria-hidden="true"><use href="/icons.svg#upload"></use></svg> Upload files</button>
+          <button id="upload-folder-button" class="button" type="button" disabled><svg aria-hidden="true"><use href="/icons.svg#upload"></use></svg> Upload folder</button>
           <input id="file-picker" type="file" multiple hidden>
+          <input id="folder-picker" type="file" webkitdirectory multiple hidden>
         </div>
       </div>
       <section class="file-panel" aria-label="Files and folders">
@@ -87,10 +89,6 @@
           </table>
         </div>
         <p id="empty-state" class="empty-state" role="status">Loading drive…</p>
-        <div id="upload-status" class="upload-status" hidden>
-          <label for="upload-progress" id="upload-label"></label>
-          <progress id="upload-progress" max="1" value="0"></progress>
-        </div>
       </section>
       <p id="page-error" class="error" role="alert" hidden></p>
       <p id="page-status" class="page-status" role="status"></p>
@@ -108,7 +106,14 @@
       <div id="preview-actions"></div>
     </div>
   </aside>
-  <div id="drop-hint" class="drop-hint" aria-hidden="true" hidden><span><svg><use href="/icons.svg#upload"></use></svg> Drop files to upload</span></div>
+  <aside id="transfer-widget" class="transfer-widget" aria-labelledby="transfer-title" hidden>
+    <div class="transfer-heading">
+      <h2 id="transfer-title">Transfers</h2>
+      <button id="clear-transfers" class="text-button" type="button" hidden>Clear finished</button>
+    </div>
+    <ul id="transfer-list" class="transfer-list"></ul>
+  </aside>
+  <div id="drop-hint" class="drop-hint" aria-hidden="true" hidden><span><svg><use href="/icons.svg#upload"></use></svg> Drop files and folders to upload</span></div>
   <div id="context-menu" class="context-menu" role="menu" aria-label="Drive actions" hidden></div>
   <dialog id="dialog" aria-labelledby="dialog-title">
     <div class="dialog-heading">

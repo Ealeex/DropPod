@@ -146,8 +146,27 @@ tbody tr.is-drop-target { background: var(--accent-soft); outline: 1px solid var
 .owner-name { display: block; max-width: 18ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .row-actions { flex-wrap: nowrap; justify-content: flex-end; gap: 4px; }
 .row-actions .icon-button { width: 32px; min-height: 32px; }
-.upload-status { padding: 12px 17px; border-top: 1px solid var(--border); overflow-wrap: anywhere; }
-progress { display: block; width: 100%; margin-top: 6px; accent-color: var(--accent); }
+.transfer-widget {
+  position: fixed;
+  z-index: 3;
+  inset: auto 14px 14px auto;
+  width: min(310px, calc(100% - 28px));
+  padding: 10px 12px;
+  border: 1px solid var(--strong-border);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: 0 6px 24px rgb(0 0 0 / 40%);
+}
+.preview-panel.is-open + .transfer-widget { inset-inline: 14px auto; }
+.transfer-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.transfer-heading h2 { font-size: .92rem; }
+.transfer-heading button { min-height: 28px; }
+.transfer-list { max-height: min(35vh, 260px); overflow: auto; list-style: none; padding: 0; margin: 4px 0 0; }
+.transfer-list li { padding: 7px 0; border-top: 1px solid var(--border); overflow-wrap: anywhere; }
+.transfer-list strong { font-size: .82rem; }
+.transfer-list p { color: var(--muted); font-size: .75rem; }
+.transfer-list [data-failed] p { color: #f28e8e; }
+.transfer-list progress { display: block; width: 100%; height: 7px; margin-block: 4px; accent-color: var(--accent); }
 .error { margin-top: 10px; color: #f28e8e; overflow-wrap: anywhere; }
 .page-status { margin-top: 8px; color: var(--muted); }
 .page-status:empty { margin: 0; }

@@ -4,9 +4,11 @@ const { createHash, randomBytes, randomUUID, scrypt, timingSafeEqual } = require
 const { promisify } = require('node:util');
 const { execFile, spawn } = require('node:child_process');
 const { existsSync, mkdirSync } = require('node:fs');
+const { isIP } = require('node:net');
 const path = require('node:path');
 const { open, unlink } = require('node:fs/promises');
 const { createMediaPreviews } = require('./media-preview');
+const { createDownloads } = require('./downloads');
 
 const deriveKey = promisify(scrypt);
 const sessionCookie = 'firesend_session';
@@ -234,6 +236,11 @@ function openDrive(data) {
       UNIQUE (parent_id, name_key)
     );
     CREATE UNIQUE INDEX IF NOT EXISTS drive_category_names ON drive_items(name_key) WHERE parent_id IS NULL;
+    CREATE TABLE IF NOT EXISTS drive_share_links (
+      token_hash TEXT PRIMARY KEY,
+      item_id TEXT NOT NULL REFERENCES drive_items(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS drive_share_links_item ON drive_share_links(item_id);
     CREATE TABLE IF NOT EXISTS drive_categories (
       id TEXT PRIMARY KEY REFERENCES drive_items(id),
       position INTEGER NOT NULL
@@ -318,6 +325,7 @@ function createDriveRouter({ data, uploads, upload, removeBlob, authMode = 'acco
   const db = openDrive(data);
   const mediaPreviews = createMediaPreviews(data, uploads);
   const getItem = db.prepare('SELECT * FROM drive_items WHERE id = ?');
+  const findChildFolder = db.prepare("SELECT id FROM drive_items WHERE parent_id = ? AND name_key = ? AND kind = 'folder'");
   const getCategories = db.prepare(`
     SELECT c.id, i.name, c.position
     FROM drive_categories c JOIN drive_items i ON i.id = c.id
@@ -342,6 +350,11 @@ function createDriveRouter({ data, uploads, upload, removeBlob, authMode = 'acco
     SELECT id, name FROM lineage ORDER BY depth DESC
   `);
   const sevenZip = resolveSevenZip();
+  const downloads = createDownloads({ data, uploads, sevenZip });
+  const sharedItem = db.prepare(`
+    SELECT i.* FROM drive_share_links s JOIN drive_items i ON i.id = s.item_id WHERE s.token_hash = ?
+  `);
+  const saveShareLink = db.prepare('INSERT INTO drive_share_links (token_hash, item_id) SELECT ?, id FROM drive_items WHERE id = ?');
 
   async function filePreview(file) {
     const extension = path.extname(file.name).toLowerCase();
@@ -386,6 +399,8 @@ function createDriveRouter({ data, uploads, upload, removeBlob, authMode = 'acco
     INSERT OR IGNORE INTO drive_blob_cleanup (id)
     SELECT id FROM drive_items WHERE kind = 'file' AND id IN (SELECT id FROM descendants)
   `);
+  const folderEntries = db.prepare(descendants + 'SELECT * FROM drive_items WHERE id IN (SELECT id FROM descendants)');
+  const readFolderEntries = (id) => folderEntries.all(id);
   const deleteTree = db.prepare(descendants + 'DELETE FROM drive_items WHERE id IN (SELECT id FROM descendants)');
   const removeCategory = db.prepare('DELETE FROM drive_categories WHERE id = ?');
   const pendingCleanup = db.prepare('SELECT id FROM drive_blob_cleanup');
@@ -436,8 +451,13 @@ function createDriveRouter({ data, uploads, upload, removeBlob, authMode = 'acco
   }
 
   function clientIp(req) {
-    const address = req.ip || req.socket?.remoteAddress || 'unknown';
-    return address.startsWith('::ffff:') ? address.slice(7) : address;
+    const peer = req.socket.remoteAddress;
+    const trustProxy = req.app.get('trust proxy fn');
+    // Express resolves X-Forwarded-For through the configured proxy chain.
+    const realIp = !req.get('X-Forwarded-For') && peer && trustProxy?.(peer, 0) ? req.get('X-Real-IP') : null;
+    const address = [realIp, req.ip, peer].find((value) => value && isIP(value)) || 'unknown';
+    const ipv4 = /^::ffff:(.+)$/i.exec(address)?.[1];
+    return ipv4 && isIP(ipv4) === 4 ? ipv4 : address;
   }
 
   function actorName(req) {
@@ -552,7 +572,7 @@ function createDriveRouter({ data, uploads, upload, removeBlob, authMode = 'acco
   }, authWindow).unref();
 
   function limitAuth(req, res, next) {
-    const address = req.ip;
+    const address = clientIp(req);
     const now = Date.now();
     let bucket = authAttempts.get(address);
     if (!bucket || bucket.until <= now) {
@@ -834,7 +854,12 @@ function createDriveRouter({ data, uploads, upload, removeBlob, authMode = 'acco
     const name = itemName(req.body?.name);
     if (!name) return res.status(400).json({ error: 'Enter a folder name of up to 150 characters without slashes.' });
     const id = randomUUID();
-    if (!insertItem.run(id, folder.id, 'folder', name, name.toLowerCase(), null, actorName(req), Date.now()).changes) {
+    const nameKey = name.toLowerCase();
+    if (!insertItem.run(id, folder.id, 'folder', name, nameKey, null, actorName(req), Date.now()).changes) {
+      if (req.body?.reuseExisting === true) {
+        const existing = findChildFolder.get(folder.id, nameKey);
+        if (existing) return res.json({ id: existing.id, reused: true });
+      }
       return res.status(409).json({ error: 'An item with that name already exists here.' });
     }
     res.status(201).json({ id });
@@ -1017,13 +1042,37 @@ function createDriveRouter({ data, uploads, upload, removeBlob, authMode = 'acco
     }
   });
 
-  router.get('/files/:id/download', (req, res, next) => {
+  router.get('/files/:id/download', (req, res) => {
     const file = getItem.get(req.params.id);
     if (file?.kind !== 'file') return res.status(404).json({ error: 'File not found.' });
-    res.download(file.id, file.name, { root: uploads, headers: { 'Content-Type': 'application/octet-stream' } }, (error) => {
-      if (error) next(error);
-    });
+    return downloads.send(req, res, file, readFolderEntries, true);
   });
+
+  router.get('/folders/:id/download', (req, res) => {
+    const folder = getItem.get(req.params.id);
+    if (folder?.kind !== 'folder') return res.status(404).json({ error: 'Folder not found.' });
+    return downloads.send(req, res, folder, readFolderEntries, true);
+  });
+
+  router.get('/transfers/:id', (req, res) => {
+    const transfer = downloads.status(req.params.id);
+    if (!transfer) return res.status(404).json({ error: 'Transfer not found.' });
+    res.json({ ...transfer, elapsed: Date.now() - transfer.startedAt });
+  });
+
+  router.post('/items/:id/share', (req, res) => {
+    const token = randomBytes(32).toString('base64url');
+    if (!saveShareLink.run(hashToken(token), req.params.id).changes) return res.status(404).json({ error: 'Item not found.' });
+    res.status(201).json({ path: `/share/${token}` });
+  });
+
+  function downloadShare(req, res) {
+    res.set('Cache-Control', 'no-store');
+    const { token } = req.params;
+    const item = /^[A-Za-z0-9_-]{43}$/.test(token) ? sharedItem.get(hashToken(token)) : null;
+    if (!item) return res.status(404).type('text/plain').send('This share link is unavailable.');
+    return downloads.send(req, res, item, readFolderEntries);
+  }
 
   router.get('/admin/accounts', requireAdmin, (req, res) => {
     const accounts = ipMode ? db.prepare(`
@@ -1103,7 +1152,7 @@ function createDriveRouter({ data, uploads, upload, removeBlob, authMode = 'acco
     res.status(400).json({ error: 'Administrator accounts are managed on the host.' });
   });
 
-  return { router, readSession };
+  return { router, readSession, downloadShare };
 }
 
 module.exports = { createDriveRouter, openDrive };

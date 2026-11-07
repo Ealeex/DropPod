@@ -3,18 +3,20 @@ const { openDrive } = require('./drive');
 const { loadConfig } = require('./config-loader');
 
 const { authMode } = loadConfig();
-const username = process.argv[2]?.trim();
-if (authMode !== 'account') {
-  console.error(`Administrator access is only available when auth-mode is "account" (current mode: "${authMode}").`);
+const identity = process.argv[2]?.trim();
+if (authMode === 'passphrase') {
+  console.error('Administrator access is available in account and IP modes.');
   process.exitCode = 1;
-} else if (!username) {
-  console.error('Usage: npm run grant-admin -- username');
+} else if (!identity) {
+  console.error(`Usage: npm run grant-admin -- ${authMode === 'ip' ? 'client-ip' : 'username'}`);
   process.exitCode = 1;
 } else {
   const data = path.resolve(process.env.FIRESEND_DATA_DIR || path.join(__dirname, '.data'));
   const db = openDrive(data);
   try {
-    const result = db.prepare("UPDATE drive_accounts SET role = 'admin', disabled = 0 WHERE username = ?").run(username);
+    const sql = authMode === 'ip' ? "UPDATE drive_ip_users SET role = 'admin' WHERE ip = ?"
+      : "UPDATE drive_accounts SET role = 'admin', disabled = 0 WHERE username = ?";
+    const result = db.prepare(sql).run(identity);
     if (result.changes) console.log('Administrator access granted.');
     else {
       console.error('Register the account in FireSend first.');
