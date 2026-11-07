@@ -90,7 +90,7 @@ svg { width: 17px; height: 17px; flex: none; fill: none; stroke: currentColor; s
   min-height: calc(100vh - 73px);
   margin-inline: auto;
 }
-.sidebar { min-width: 0; padding: 30px 7px 24px 0; border-right: 1px solid var(--border); }
+.drive-sidebar { min-width: 0; padding: 30px 7px 24px 0; border-right: 1px solid var(--border); }
 #categories { display: grid; gap: 4px; }
 .category-manager { width: 100%; margin-top: 7px; padding-inline: 4px; font-size: .77rem; }
 .category-manager svg, .drive-link svg { width: 14px; height: 14px; }
@@ -461,7 +461,7 @@ tbody tr.is-drop-target { background: var(--accent-soft); outline: 1px solid var
 @media (max-width: 760px) {
   .topbar-inner, .workspace { width: calc(100% - 30px); }
   .workspace { display: block; }
-  .sidebar { display: flex; align-items: center; gap: 8px; padding: 10px 0 0; border-right: 0; }
+  .drive-sidebar { display: flex; align-items: center; gap: 8px; padding: 10px 0 0; border-right: 0; }
   #categories { display: flex; flex: 1; flex-wrap: wrap; gap: 4px; min-width: 0; }
   .drive-link { max-width: min(150px, 100%); }
   .category-manager { flex: none; width: auto; margin: 0; padding-inline: 8px; }
@@ -556,7 +556,7 @@ tbody tr.is-drop-target { background: var(--accent-soft); outline: 1px solid var
   backdrop-filter: blur(22px) brightness(.75);
   box-shadow: inset 0 1px rgb(228 254 255 / 25%), 0 8px 22px rgb(0 17 26 / 26%);
 }
-[data-theme="vista"] .sidebar { border-right-color: transparent; }
+[data-theme="vista"] .drive-sidebar { border-right-color: transparent; }
 [data-theme="vista"] .drive-link {
   color: var(--text);
   border-color: rgb(198 244 255 / 32%);
