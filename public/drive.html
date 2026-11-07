@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#101112">
+  <meta name="description" content="A shared drive for your group.">
+  <title>FireSend · Shared drive</title>
+  <link rel="icon" href="/mark.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/drive.css">
+  <script src="/drive.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <a class="brand" href="/" aria-label="FireSend shared drive">
+        <span class="brand-icon"><svg aria-hidden="true"><use href="/icons.svg#send"></use></svg></span>
+      </a>
+      <div id="account-controls" class="account-controls"></div>
+    </div>
+  </header>
+  <main id="access-screen" class="access-screen" hidden>
+    <p>Sign in to access the shared drive.</p>
+    <div id="access-actions" class="account-controls"></div>
+    <p id="access-error" class="error" role="alert" hidden></p>
+  </main>
+  <main id="workspace" class="workspace" hidden>
+    <aside class="sidebar" aria-label="Drive navigation">
+      <nav id="categories" aria-label="Categories"></nav>
+      <button id="manage-categories" class="button category-manager" type="button" disabled><svg aria-hidden="true"><use href="/icons.svg#folder-plus"></use></svg> Categories</button>
+    </aside>
+    <div class="content">
+      <div class="folder-toolbar">
+        <nav aria-label="Folder path" class="breadcrumbs" id="breadcrumbs"></nav>
+        <div class="toolbar">
+          <button id="new-folder" class="button" type="button" disabled><svg aria-hidden="true"><use href="/icons.svg#folder-plus"></use></svg> New folder</button>
+          <button id="upload-button" class="button primary" type="button" disabled><svg aria-hidden="true"><use href="/icons.svg#upload"></use></svg> Upload files</button>
+          <input id="file-picker" type="file" multiple hidden>
+        </div>
+      </div>
+      <section class="file-panel" aria-label="Files and folders">
+        <div class="file-table" id="file-table" hidden>
+          <table>
+            <thead><tr><th scope="col">Name</th><th scope="col" class="date-column">Modified</th><th scope="col" class="size-column">Size</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead>
+            <tbody id="items"></tbody>
+          </table>
+        </div>
+        <p id="empty-state" class="empty-state" role="status">Loading drive…</p>
+        <div id="upload-status" class="upload-status" hidden>
+          <label for="upload-progress" id="upload-label"></label>
+          <progress id="upload-progress" max="1" value="0"></progress>
+        </div>
+      </section>
+      <p id="page-error" class="error" role="alert" hidden></p>
+      <p id="page-status" class="page-status" role="status"></p>
+    </div>
+  </main>
+  <aside id="preview-panel" class="preview-panel" aria-labelledby="preview-name" aria-hidden="true" inert>
+    <div class="preview-header">
+      <h2 id="preview-name"></h2>
+      <button id="close-preview" type="button" class="icon-button" aria-label="Close preview" title="Close preview"><svg aria-hidden="true"><use href="/icons.svg#close"></use></svg></button>
+    </div>
+    <div id="preview-content" class="preview-content"></div>
+    <div class="preview-footer">
+      <p id="preview-meta" class="meta"></p>
+      <div id="preview-actions"></div>
+    </div>
+  </aside>
+  <div id="drop-hint" class="drop-hint" aria-hidden="true" hidden><span><svg><use href="/icons.svg#upload"></use></svg> Drop files to upload</span></div>
+  <div id="context-menu" class="context-menu" role="menu" aria-label="Drive actions" hidden></div>
+  <dialog id="dialog" aria-labelledby="dialog-title">
+    <div class="dialog-heading">
+      <h2 id="dialog-title"></h2>
+      <button id="close-dialog" type="button" class="icon-button" aria-label="Close dialog" title="Close"><svg aria-hidden="true"><use href="/icons.svg#close"></use></svg></button>
+    </div>
+    <div id="dialog-body"></div>
+    <p id="dialog-error" class="error" role="alert" hidden></p>
+  </dialog>
+</body>
+</html>

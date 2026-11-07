@@ -7,13 +7,13 @@ const { mkdirSync } = require('node:fs');
 const { unlink } = require('node:fs/promises');
 const { networkInterfaces } = require('node:os');
 const path = require('node:path');
+const { createDriveRouter } = require('./drive');
 
 const app = express();
 const port = 3001;
 const data = path.resolve(process.env.FIRESEND_DATA_DIR || path.join(__dirname, '.data'));
 const uploads = path.join(data, 'uploads');
 const roomDuration = 24 * 60 * 60 * 1000;
-const maxFileSize = 500 * 1024 * 1024;
 const alphabet = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
 
 mkdirSync(uploads, { recursive: true });
@@ -36,7 +36,7 @@ const upload = multer({
     filename: (req, file, done) => done(null, randomUUID()),
   }),
   defParamCharset: 'utf8',
-  limits: { fileSize: maxFileSize + 1, files: 1, fields: 0, parts: 2 },
+  limits: { files: 1, fields: 0, parts: 2 },
 }).single('file');
 
 function removeBlob(id) {
@@ -82,6 +82,9 @@ app.use('/api', (req, res, next) => {
   next();
 });
 app.use(express.json({ limit: '2kb' }));
+const drive = createDriveRouter({ data, uploads, upload, removeBlob });
+app.use('/api/drive', drive.router);
+app.use('/api', drive.readSession, drive.requireMember);
 
 app.post('/api/rooms', (req, res) => {
   const expiresAt = Date.now() + roomDuration;
@@ -129,10 +132,6 @@ app.post('/api/rooms/:code/files', findRoom, (req, res, next) => {
     try {
       if (error) return next(error);
       if (!req.file) return res.status(400).json({ error: 'Choose a file to upload.' });
-      if (req.file.size > maxFileSize) {
-        await removeBlob(req.file.filename);
-        return res.status(413).json({ error: 'Files must be 500 MB or smaller.' });
-      }
       if (req.room.expiresAt <= Date.now()) {
         await removeBlob(req.file.filename);
         return res.status(404).json({ error: 'This room has expired.' });
@@ -156,24 +155,29 @@ app.post('/api/rooms/:code/files', findRoom, (req, res, next) => {
 app.get('/api/rooms/:code/files/:id', findRoom, (req, res, next) => {
   const file = db.prepare('SELECT id, name FROM files WHERE code = ? AND id = ?').get(req.room.code, req.params.id);
   if (!file) return res.status(404).json({ error: 'File not found.' });
-  res.download(path.join(uploads, file.id), file.name, { headers: { 'Content-Type': 'application/octet-stream' } }, (error) => {
+  res.download(file.id, file.name, { root: uploads, headers: { 'Content-Type': 'application/octet-stream' } }, (error) => {
     if (error) next(error);
   });
 });
 
+app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'public', 'drive.html')));
+app.get(['/room/:code', '/public-rooms', '/guide', '/index.html'], drive.readSession, (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  if (!req.driveAccount) return res.redirect('/');
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
 app.use(express.static(path.join(__dirname, 'public')));
-app.get(['/room/:code', '/public-rooms', '/guide'], (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 app.use('/api', (req, res) => res.status(404).json({ error: 'Not found.' }));
 
 app.use((error, req, res, next) => {
   if (res.headersSent) return next(error);
   if (error instanceof multer.MulterError) {
-    const tooLarge = error.code === 'LIMIT_FILE_SIZE';
-    return res.status(tooLarge ? 413 : 400).json({ error: tooLarge ? 'Files must be 500 MB or smaller.' : 'Send one file per upload.' });
+    return res.status(400).json({ error: 'Send one file per upload.' });
   }
   if (error.status >= 400 && error.status < 500) return res.status(error.status).json({ error: 'The request could not be processed.' });
   console.error(error);
   res.status(500).json({ error: 'Something went wrong. Please try again.' });
 });
 
-app.listen(port, '0.0.0.0', () => console.log(`FireSend is running at http://localhost:${port}`));
+const server = app.listen(port, '0.0.0.0', () => console.log(`FireSend is running at http://localhost:${port}`));
+server.requestTimeout = 0;

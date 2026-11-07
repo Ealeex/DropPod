@@ -11,4 +11,15 @@
   <symbol id="copy" viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></symbol>
   <symbol id="clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
   <symbol id="check" viewBox="0 0 24 24"><path d="m4 12 5 5L20 6"/></symbol>
+  <symbol id="folder" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></symbol>
+  <symbol id="folder-plus" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2zm9 3v7m-3.5-3.5h7"/></symbol>
+  <symbol id="send" viewBox="0 0 24 24"><path d="m3 10 18-7-6 18-4.4-6.6L3 10zm7.6 4.4L21 3"/></symbol>
+  <symbol id="close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
+  <symbol id="rename" viewBox="0 0 24 24"><path d="m4 16 12-12 4 4L8 20H4v-4zm10-10 4 4"/></symbol>
+  <symbol id="shield" viewBox="0 0 24 24"><path d="M12 22s7-3 7-10V5l-7-3-7 3v7c0 7 7 10 7 10zm-3-10 2 2 4-4"/></symbol>
+  <symbol id="more" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></symbol>
+  <symbol id="trash" viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3m3 0-1 13H7L6 7m4 4v5m4-5v5"/></symbol>
+  <symbol id="up" viewBox="0 0 24 24"><path d="M12 19V5m-5 5 5-5 5 5"/></symbol>
+  <symbol id="down" viewBox="0 0 24 24"><path d="M12 5v14m-5-5 5 5 5-5"/></symbol>
+  <symbol id="settings" viewBox="0 0 24 24"><path d="M10 3h4l.5 2.5 2 .9 2.1-1.4 2 3.5-1.8 1.7v2.3l1.8 1.7-2 3.5-2.1-1.4-2 .9-.5 2.8h-4l-.5-2.8-2-.9-2.1 1.4-2-3.5 1.8-1.7v-2.3L3.4 8.5l2-3.5 2.1 1.4 2-.9L10 3z"/><circle cx="12" cy="11.5" r="3"/></symbol>
 </svg>

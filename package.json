@@ -1,9 +1,10 @@
 {
   "name": "firesend-local",
   "version": "1.0.0",
-  "description": "Local room-based file sharing with Express",
+  "description": "Shared local file storage with Express",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "grant-admin": "node drive-admin.js"
   },
   "type": "commonjs",
   "dependencies": {

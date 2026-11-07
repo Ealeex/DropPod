@@ -74,7 +74,6 @@ h2 { font-size: 1.5rem; }
 .orb.orange { color: white; box-shadow: 0 7px 22px #ff941b40; }
 .orb.blue { background: linear-gradient(130deg, #2c7ef1, #6251df); box-shadow: 0 7px 22px #4b70fc45; }
 .quick h3 { margin: 17px 0 5px; font-size: 1.23rem; color: #7ce4f6; }
-.quick .small { color: #a2adc1; font-size: .82rem; }
 .quick .button { width: 100%; margin-top: 16px; }
 
 .join { max-width: 445px; margin: 30px auto 0; padding: 24px 28px; text-align: center; scroll-margin: 20px; }

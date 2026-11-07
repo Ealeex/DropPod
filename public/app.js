@@ -2,7 +2,6 @@ const app = document.querySelector('#app');
 const announcement = document.querySelector('#announcement');
 const icon = (name) => `<svg aria-hidden="true"><use href="/icons.svg#${name}"></use></svg>`;
 const codePattern = /^[A-Z0-9]{6}$/;
-const maxSize = 500 * 1024 * 1024;
 
 async function request(url, options) {
   const response = await fetch(url, options);
@@ -87,7 +86,7 @@ function home() {
     <article class="card quick">
       <span class="orb cyan">${icon('bolt')}</span>
       <h3>Quick Share</h3>
-      <p>24 hours</p><p class="small">500 MB per file</p>
+      <p>24 hours</p>
       <button id="create-room" class="button cyan">Start Now</button>
     </article>
     <p id="create-error" class="error" role="alert" hidden></p>
@@ -222,7 +221,7 @@ async function roomPage(code) {
       <h2 id="transfer-title">Upload Files</h2>
       <button id="drop" class="dropzone" type="button">
         <span class="orb cyan">${icon('upload')}</span>
-        <strong>Drop files here or click to browse</strong><span>Up to 500 MB per file</span>
+        <strong>Drop files here or click to browse</strong>
       </button>
       <input type="file" id="picker" multiple hidden>
       <div id="upload-progress" hidden><label for="progress">Uploading <span id="upload-name"></span></label><progress id="progress" max="1"></progress></div>
@@ -334,10 +333,6 @@ async function roomPage(code) {
     errorBox.hidden = true;
     const errors = [];
     for (const file of files) {
-      if (file.size > maxSize) {
-        errors.push(`${file.name} exceeds 500 MB.`);
-        continue;
-      }
       progress.value = 0;
       uploadName.textContent = file.name;
       progressBox.hidden = false;
@@ -412,7 +407,7 @@ function guide() {
     <p>Send files from your browser to another device on your network.</p></header>
     <ol class="guide-steps">
       <li class="card"><h2>Create a room</h2><p>Choose Start Now on the homepage to generate a six-character code. The room lasts 24 hours.</p></li>
-      <li class="card"><h2>Add your files</h2><p>Drag files into the upload area or click to select them. Each file can be up to 500 MB.</p></li>
+      <li class="card"><h2>Add your files</h2><p>Drag files into the upload area or click to select them.</p></li>
       <li class="card"><h2>Open the room on another device</h2><p>Scan the room’s QR code, open its link, or enter the code in Join Room on the same FireSend server.</p></li>
       <li class="card"><h2>Download what you need</h2><p>Select Download beside a file to save it on your device.</p></li>
     </ol><a href="/" class="button primary">Go to FireSend ${icon('arrow')}</a></div>`;
