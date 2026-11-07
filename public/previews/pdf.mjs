@@ -1,18 +1,16 @@
 import { AnnotationMode, getDocument, GlobalWorkerOptions } from '/vendor/pdf/build/pdf.min.mjs';
 import { EventBus, FindState, PDFFindController, PDFLinkService, PDFSinglePageViewer } from '/vendor/pdf/web/pdf_viewer.mjs';
 
+import { button, showMessage } from './common.mjs';
+
 GlobalWorkerOptions.workerSrc = '/vendor/pdf/build/pdf.worker.min.mjs';
 
-function control(label, onClick) {
-  const button = document.createElement('button');
-  button.type = 'button';
-  button.className = 'text-button';
-  button.textContent = label;
-  button.addEventListener('click', onClick);
-  return button;
+export function render({ host, url }) {
+  showMessage(host, 'Loading PDF…');
+  return renderPdf(host, url);
 }
 
-export function createPdfPreview(host, source) {
+export function renderPdf(host, source) {
   const view = document.createElement('div');
   view.className = 'pdf-preview';
   const toolbar = document.createElement('div');
@@ -25,13 +23,13 @@ export function createPdfPreview(host, source) {
   page.type = 'number';
   page.min = 1;
   page.setAttribute('aria-label', 'Page number');
-  const previous = control('Previous', () => viewer.previousPage());
-  const next = control('Next', () => viewer.nextPage());
-  const zoomOut = control('−', () => viewer.decreaseScale());
+  const previous = button('Previous', () => viewer.previousPage());
+  const next = button('Next', () => viewer.nextPage());
+  const zoomOut = button('−', () => viewer.decreaseScale());
   zoomOut.setAttribute('aria-label', 'Zoom out');
-  const zoomIn = control('+', () => viewer.increaseScale());
+  const zoomIn = button('+', () => viewer.increaseScale());
   zoomIn.setAttribute('aria-label', 'Zoom in');
-  const fit = control('Fit width', () => { viewer.currentScaleValue = 'page-width'; });
+  const fit = button('Fit width', () => { viewer.currentScaleValue = 'page-width'; });
   toolbar.append(previous, page, next, status, zoomOut, zoomIn, fit);
   const search = document.createElement('form');
   search.className = 'pdf-toolbar';
@@ -40,8 +38,8 @@ export function createPdfPreview(host, source) {
   query.maxLength = 200;
   query.placeholder = 'Find in document';
   query.setAttribute('aria-label', 'Find in document');
-  const findPrevious = control('Previous match', () => find(true));
-  const findNext = control('Next match', () => find(false));
+  const findPrevious = button('Previous match', () => find(true));
+  const findNext = button('Next match', () => find(false));
   const matches = document.createElement('span');
   matches.className = 'meta';
   matches.setAttribute('role', 'status');
