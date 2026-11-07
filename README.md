@@ -27,4 +27,4 @@ The command enables the account and grants it admin access. Sign in to see the A
 
 ## Data
 
-FireSend stores metadata and uploads under `.data` by default. Set `FIRESEND_DATA_DIR` to use a different directory, and use the same setting when granting admin access. Existing room links require sign-in and still use the original 24-hour expiration. Room contents are separate from the shared drive.
+FireSend stores metadata and uploads under `.data` by default. Set `FIRESEND_DATA_DIR` to use a different directory, and use the same setting when granting admin access.

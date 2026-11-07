@@ -106,7 +106,7 @@ svg { width: 17px; height: 17px; flex: none; fill: none; stroke: currentColor; s
   font-weight: 700;
 }
 .drive-link:hover { border-color: var(--border); background: var(--surface); }
-.drive-link[aria-current] { border-color: var(--border-strong); background: var(--accent-soft); }
+.drive-link[aria-current] { border-color: var(--strong-border); background: var(--accent-soft); }
 .drive-link[aria-current] svg { color: var(--accent); }
 .drive-link span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .content { min-width: 0; padding: 30px 0 28px; }
@@ -197,7 +197,7 @@ progress { display: block; width: 100%; margin-top: 6px; accent-color: var(--acc
   width: min(525px, 100%);
   visibility: hidden;
   transform: translateX(100%);
-  border-left: 1px solid var(--border-strong);
+  border-left: 1px solid var(--strong-border);
   background: var(--surface);
   box-shadow: -18px 0 48px rgb(0 0 0 / 40%);
   transition: transform .2s ease, visibility .2s;

@@ -1,7 +1,7 @@
 {
   "name": "firesend-local",
   "version": "1.0.0",
-  "description": "Shared local file storage with Express",
+  "description": "Shared local drive with Express",
   "scripts": {
     "start": "node server.js",
     "grant-admin": "node drive-admin.js"
@@ -9,8 +9,7 @@
   "type": "commonjs",
   "dependencies": {
     "express": "^5.3.0",
-    "multer": "^2.5.0",
-    "qrcode": "^1.5.4"
+    "multer": "^2.5.0"
   },
   "private": true,
   "engines": {
