@@ -27,6 +27,7 @@ const dialogError = $('#dialog-error');
 const pageError = $('#page-error');
 const previewPanel = $('#preview-panel');
 const previewBody = $('#preview-content');
+const previewResize = $('#preview-resize');
 const contextMenu = $('#context-menu');
 let menuTrigger = null;
 
@@ -316,12 +317,14 @@ function downloadLink(item) {
 function closePreview({ restoreFocus = false } = {}) {
   const preview = state.preview;
   if (!preview) return;
+  preview.dispose?.();
   state.preview = null;
   preview.trigger.setAttribute('aria-expanded', 'false');
   if (restoreFocus && preview.trigger.isConnected) preview.trigger.focus();
   previewPanel.classList.remove('is-open');
   previewPanel.inert = true;
   previewPanel.setAttribute('aria-hidden', 'true');
+  previewBody.className = 'preview-content';
   previewBody.replaceChildren();
 }
 
@@ -332,8 +335,277 @@ function previewMessage(message) {
   previewBody.replaceChildren(text);
 }
 
+const previewWidthKey = 'firesend:preview-width';
+let previewWidth = 525;
+try {
+  const saved = Number(localStorage.getItem(previewWidthKey));
+  if (saved > 0 && Number.isFinite(saved)) previewWidth = saved;
+} catch {}
+
+function setPreviewWidth(width, save = false) {
+  const maximum = document.documentElement.clientWidth;
+  const minimum = Math.min(280, maximum);
+  previewWidth = Math.round(Math.max(minimum, Math.min(width, maximum)));
+  previewPanel.style.setProperty('--preview-width', `${previewWidth}px`);
+  previewResize.setAttribute('aria-valuemin', minimum);
+  previewResize.setAttribute('aria-valuemax', maximum);
+  previewResize.setAttribute('aria-valuenow', previewWidth);
+  if (save) {
+    try { localStorage.setItem(previewWidthKey, previewWidth); } catch {}
+  }
+}
+
+let resizeStart;
+previewResize.addEventListener('pointerdown', (event) => {
+  if (!event.isPrimary || event.button !== 0) return;
+  event.preventDefault();
+  previewResize.setPointerCapture(event.pointerId);
+  resizeStart = { id: event.pointerId, x: event.clientX, width: previewPanel.offsetWidth };
+});
+previewResize.addEventListener('pointermove', (event) => {
+  if (event.pointerId === resizeStart?.id) {
+    setPreviewWidth(resizeStart.width + resizeStart.x - event.clientX);
+  }
+});
+previewResize.addEventListener('lostpointercapture', (event) => {
+  if (event.pointerId !== resizeStart?.id) return;
+  resizeStart = null;
+  setPreviewWidth(previewWidth, true);
+});
+previewResize.addEventListener('keydown', (event) => {
+  const widths = { ArrowLeft: previewWidth + 24, ArrowRight: previewWidth - 24, Home: 280, End: Infinity };
+  if (!Object.hasOwn(widths, event.key)) return;
+  event.preventDefault();
+  setPreviewWidth(widths[event.key], true);
+});
+
+setPreviewWidth(previewWidth);
+window.addEventListener('resize', () => setPreviewWidth(previewWidth));
+
+async function handlePreviewAuth(response) {
+  if (response.status !== 401) return false;
+  const data = await response.json().catch(() => ({}));
+  if (data.passphraseRequired) showPassphraseScreen('Enter the passphrase to continue.');
+  else if (data.ipRequired) loadSession().catch(() => {});
+  else if (data.signInRequired || state.account) setAccount(null);
+  return true;
+}
+
+function archiveEntryUrl(item, entry) {
+  return `/api/drive/files/${encodeURIComponent(item.id)}/archive/entry?path=${encodeURIComponent(entry.path)}`;
+}
+
+function buildArchiveTree(entries) {
+  const root = { folders: new Map(), files: [], size: 0 };
+  for (const entry of entries) {
+    const parts = entry.path.split(/[\\/]/).filter(Boolean);
+    if (!parts.length) continue;
+    const folders = entry.folder ? parts : parts.slice(0, -1);
+    let node = root;
+    for (const folder of folders) {
+      let child = node.folders.get(folder);
+      if (!child) {
+        child = { folders: new Map(), files: [], size: 0 };
+        node.folders.set(folder, child);
+      }
+      node = child;
+    }
+    if (!entry.folder) node.files.push({ ...entry, name: parts.at(-1) });
+  }
+  const total = (node) => {
+    let size = node.files.reduce((sum, file) => sum + file.size, 0);
+    for (const child of node.folders.values()) size += total(child);
+    node.size = size;
+    return size;
+  };
+  total(root);
+  return root;
+}
+
+function createArchiveBrowser(item, entries, preview) {
+  const root = buildArchiveTree(entries);
+  const container = document.createElement('div');
+  container.className = 'archive-view';
+  const toolbar = document.createElement('div');
+  toolbar.className = 'archive-toolbar';
+  const content = document.createElement('div');
+  content.className = 'archive-content';
+  container.append(toolbar, content);
+
+  let path = [];
+  let node = root;
+  let requestVersion = 0;
+
+  function showToolbar(back, label) {
+    toolbar.replaceChildren();
+    if (back) toolbar.append(makeButton('Back', back, 'text-button'));
+    const crumb = document.createElement('span');
+    crumb.className = 'archive-path';
+    crumb.textContent = label;
+    toolbar.append(crumb);
+  }
+
+  function goTo(nextPath) {
+    path = nextPath;
+    node = root;
+    for (const part of path) node = node.folders.get(part) || node;
+    renderFolder();
+  }
+
+  function renderFolder() {
+    requestVersion += 1;
+    showToolbar(path.length ? () => goTo(path.slice(0, -1)) : null, `/${path.join('/')}`);
+    const folders = [...node.folders.entries()].sort(([a], [b]) => a.localeCompare(b));
+    const files = [...node.files].sort((a, b) => a.name.localeCompare(b.name));
+    const count = folders.length + files.length;
+    const summary = document.createElement('p');
+    summary.className = 'archive-summary meta';
+    summary.textContent = count ? `${count} item${count === 1 ? '' : 's'} · ${sizeLabel(node.size)}` : 'This folder is empty.';
+    const list = document.createElement('ul');
+    list.className = 'archive-list';
+
+    for (const [folderName, child] of folders) {
+      const row = makeButton('', () => goTo([...path, folderName]), 'archive-row');
+      row.title = [...path, folderName].join('/');
+      row.innerHTML = `<span class="item-icon folder-icon">${icon('folder')}</span><span class="archive-row-name"></span><span class="archive-row-meta"></span>`;
+      row.querySelector('.archive-row-name').textContent = folderName;
+      row.querySelector('.archive-row-meta').textContent = sizeLabel(child.size);
+      const entry = document.createElement('li');
+      entry.append(row);
+      list.append(entry);
+    }
+
+    for (const file of files) {
+      const row = makeButton('', () => openEntry(file), 'archive-row');
+      row.title = file.path;
+      row.innerHTML = `<span class="item-icon">${icon('file')}</span><span class="archive-row-name"></span><span class="archive-row-meta"></span>`;
+      row.querySelector('.archive-row-name').textContent = file.name;
+      row.querySelector('.archive-row-meta').textContent = [
+        sizeLabel(file.size), file.encrypted ? 'Locked' : '', file.preview ? '' : 'No preview',
+      ].filter(Boolean).join(' · ');
+      const entry = document.createElement('li');
+      entry.append(row);
+      list.append(entry);
+    }
+
+    content.replaceChildren(summary, list);
+  }
+
+  async function openEntry(entry) {
+    const version = ++requestVersion;
+    showToolbar(() => renderFolder(), `/${[...path, entry.name].join('/')}`);
+    const wrapper = document.createElement('div');
+    wrapper.className = 'archive-entry';
+    content.replaceChildren(wrapper);
+
+    if (!entry.preview) {
+      wrapper.append(archiveMessage('Preview unavailable for this entry.'));
+      return;
+    }
+
+    const url = archiveEntryUrl(item, entry);
+    if (entry.preview === 'text') {
+      wrapper.append(archiveMessage('Loading…'));
+      try {
+        const response = await fetch(url);
+        if (version !== requestVersion || state.preview !== preview) return;
+        if (!response.ok) {
+          if (await handlePreviewAuth(response)) return;
+          throw new Error('Archive entry unavailable.');
+        }
+        const text = await response.text();
+        if (version !== requestVersion) return;
+        const pre = document.createElement('pre');
+        pre.textContent = text;
+        wrapper.replaceChildren(pre);
+        if (entry.previewTruncated) wrapper.append(archiveMessage('Showing the first 128 KB.'));
+      } catch {
+        if (version === requestVersion) wrapper.replaceChildren(archiveMessage('Preview unavailable for this entry.'));
+      }
+      return;
+    }
+
+    const media = document.createElement(entry.preview === 'image' ? 'img' : entry.preview);
+    if (media instanceof HTMLImageElement) media.alt = entry.name;
+    else {
+      media.controls = true;
+      media.preload = 'metadata';
+      media.setAttribute('aria-label', entry.name);
+    }
+    media.addEventListener('error', () => {
+      if (version === requestVersion) wrapper.replaceChildren(archiveMessage('Preview unavailable for this entry.'));
+    });
+    media.src = url;
+    wrapper.replaceChildren(media);
+  }
+
+  renderFolder();
+
+  return {
+    element: container,
+    dispose() {
+      requestVersion += 1;
+    },
+  };
+}
+
+function archiveMessage(message) {
+  const text = document.createElement('p');
+  text.className = 'preview-message';
+  text.textContent = message;
+  return text;
+}
+
+async function openArchivePreview(item, preview) {
+  previewMessage('Loading archive…');
+  try {
+    const response = await fetch(`/api/drive/files/${encodeURIComponent(item.id)}/archive`);
+    if (!response.ok) {
+      if (await handlePreviewAuth(response)) return;
+      const data = await response.json().catch(() => ({}));
+      throw new Error(data.error || 'Archive preview unavailable.');
+    }
+    const data = await response.json();
+    if (state.preview !== preview) return;
+    const browser = createArchiveBrowser(item, data.entries, preview);
+    preview.dispose = () => browser.dispose();
+    previewBody.replaceChildren(browser.element);
+  } catch (error) {
+    if (state.preview === preview) previewMessage(error.message || 'Archive preview unavailable.');
+  }
+}
+
+async function openModelPreview(item, preview) {
+  previewMessage('Loading 3D model…');
+  const url = `/api/drive/files/${encodeURIComponent(item.id)}/preview`;
+  try {
+    const response = await fetch(url);
+    if (!response.ok) {
+      if (await handlePreviewAuth(response)) return;
+      throw new Error('Preview unavailable.');
+    }
+    const text = await response.text();
+    if (state.preview !== preview) return;
+    const { createModelPreview } = await import('./model-viewer.mjs');
+    if (state.preview !== preview) return;
+    const files = state.folder?.items?.filter((sibling) => sibling.kind === 'file') || [];
+    const viewer = createModelPreview({ text, name: item.name, files });
+    if (state.preview !== preview) {
+      viewer.dispose();
+      return;
+    }
+    preview.dispose = () => viewer.dispose();
+    previewBody.classList.add('model-mode');
+    previewBody.replaceChildren(viewer.element);
+  } catch (error) {
+    console.error(error);
+    if (state.preview === preview) previewMessage('Preview unavailable. The model could not be rendered.');
+  }
+}
+
 async function openPreview(item, trigger, { focus = true } = {}) {
   closePreview();
+  previewBody.className = 'preview-content';
   const preview = { item, trigger };
   state.preview = preview;
   trigger.setAttribute('aria-expanded', 'true');
@@ -349,6 +621,14 @@ async function openPreview(item, trigger, { focus = true } = {}) {
   if (focus) $('#close-preview').focus();
 
   const url = `/api/drive/files/${encodeURIComponent(item.id)}/preview`;
+  if (item.preview === 'archive') {
+    openArchivePreview(item, preview);
+    return;
+  }
+  if (item.preview === 'model') {
+    openModelPreview(item, preview);
+    return;
+  }
   if (item.preview === 'text') {
     previewMessage('Loading preview…');
     try {
@@ -386,11 +666,27 @@ async function openPreview(item, trigger, { focus = true } = {}) {
       media.preload = 'metadata';
       media.setAttribute('aria-label', item.name);
     }
+    let converted = Boolean(item.convertPreview);
+    let loading;
+    function showConversion() {
+      loading = archiveMessage('Preparing a compatible preview…');
+      loading.setAttribute('role', 'status');
+      previewBody.append(loading);
+    }
+    media.addEventListener(item.preview === 'image' ? 'load' : 'loadedmetadata', () => loading?.remove());
     media.addEventListener('error', () => {
-      if (state.preview === preview) previewMessage('Preview unavailable. Download the file to open it.');
+      if (state.preview !== preview) return;
+      if (!converted) {
+        converted = true;
+        showConversion();
+        media.src = `${url}?compatible=1`;
+        return;
+      }
+      previewMessage('Preview unavailable. Download the file to open it.');
     });
-    media.src = url;
     previewBody.replaceChildren(media);
+    if (converted) showConversion();
+    media.src = url;
     return;
   }
   previewMessage('Preview unavailable. Download the file to open it.');
@@ -400,20 +696,45 @@ function renderItem(item) {
   const row = document.createElement('tr');
   row.dataset.itemId = item.id;
   row.dataset.itemVersion = JSON.stringify(item);
+  row.draggable = true;
+  if (item.kind === 'folder') {
+    row.dataset.dropFolder = item.id;
+    row.dataset.dropName = item.name;
+  }
   const nameCell = row.insertCell();
   const name = document.createElement('div');
   name.className = 'item-name';
   name.innerHTML = `<span class="item-icon ${item.kind === 'folder' ? 'folder-icon' : ''}">${icon(item.kind === 'folder' ? 'folder' : 'file')}</span>`;
   if (item.kind === 'folder') {
-    name.append(folderLink(item.id, item.name));
+    const link = folderLink(item.id, item.name);
+    link.draggable = false;
+    name.append(link);
   } else {
     const button = makeButton(item.name, () => openPreview(item, button), 'preview-trigger');
     button.setAttribute('aria-label', `Preview ${item.name}`);
     button.setAttribute('aria-controls', 'preview-panel');
     button.setAttribute('aria-expanded', 'false');
     name.append(button);
+    if (item.preview === 'image' || item.preview === 'video') {
+      const thumbnail = document.createElement('img');
+      thumbnail.className = 'item-thumbnail';
+      thumbnail.alt = '';
+      thumbnail.draggable = false;
+      thumbnail.loading = 'lazy';
+      thumbnail.decoding = 'async';
+      thumbnail.addEventListener('load', () => name.classList.add('has-thumbnail'), { once: true });
+      thumbnail.addEventListener('error', () => thumbnail.remove(), { once: true });
+      button.append(thumbnail);
+      thumbnail.src = `/api/drive/files/${encodeURIComponent(item.id)}/thumbnail`;
+    }
   }
   nameCell.append(name);
+  const owner = row.insertCell();
+  owner.className = 'owner-column meta';
+  const ownerName = document.createElement('span');
+  ownerName.className = 'owner-name';
+  ownerName.textContent = item.createdBy || '—';
+  owner.append(ownerName);
   const date = row.insertCell();
   date.className = 'date-column meta';
   date.textContent = dateFormat.format(item.updatedAt);
@@ -438,6 +759,25 @@ function renderItem(item) {
     showItemMenu(item, row, more, event);
   });
   row.insertCell().append(actions);
+  return row;
+}
+
+function renderParentRow(parent) {
+  const row = document.createElement('tr');
+  row.className = 'parent-folder-row';
+  row.dataset.dropFolder = parent.id;
+  row.dataset.dropName = parent.name;
+  const cell = row.insertCell();
+  cell.colSpan = 5;
+  const name = document.createElement('div');
+  name.className = 'item-name';
+  name.innerHTML = `<span class="item-icon folder-icon">${icon('folder')}</span>`;
+  const link = folderLink(parent.id, '..');
+  link.draggable = false;
+  link.setAttribute('aria-label', `Parent folder: ${parent.name}`);
+  link.title = `Parent folder: ${parent.name}`;
+  name.append(link);
+  cell.append(name);
   return row;
 }
 
@@ -469,7 +809,8 @@ function renderFolder(previous) {
     else link.removeAttribute('aria-current');
   }
 
-  if (JSON.stringify(previous?.path) !== JSON.stringify(folder.path)) {
+  const pathChanged = JSON.stringify(previous?.path) !== JSON.stringify(folder.path);
+  if (pathChanged) {
     document.title = `${folder.path.at(-1).name} · FireSend`;
     const crumbs = $('#breadcrumbs');
     crumbs.replaceChildren();
@@ -493,17 +834,18 @@ function renderFolder(previous) {
     }
   }
 
-  if (JSON.stringify(previous?.items) !== JSON.stringify(folder.items)) renderItems(folder.items);
+  const parent = folder.path.at(-2);
+  if (pathChanged || JSON.stringify(previous?.items) !== JSON.stringify(folder.items)) renderItems(folder.items, parent);
   const empty = folder.items.length === 0;
-  $('#file-table').hidden = empty;
+  $('#file-table').hidden = empty && !parent;
   $('#empty-state').hidden = !empty;
   $('#empty-state').textContent = 'No files or folders';
 }
 
-function renderItems(items) {
+function renderItems(items, parent) {
   const table = $('#items');
   const existing = new Map([...table.rows].map((row) => [row.dataset.itemId, row]));
-  const next = items.map((item) => {
+  const itemRows = items.map((item) => {
     const row = existing.get(item.id);
     if (row?.dataset.itemVersion === JSON.stringify(item)) {
       existing.delete(item.id);
@@ -511,6 +853,16 @@ function renderItems(items) {
     }
     return renderItem(item);
   });
+  const next = [...itemRows];
+  if (parent) {
+    const row = existing.get(undefined);
+    if (row?.dataset.dropFolder === parent.id && row.dataset.dropName === parent.name) {
+      existing.delete(undefined);
+      next.unshift(row);
+    } else {
+      next.unshift(renderParentRow(parent));
+    }
+  }
   const focused = document.activeElement;
   for (const row of existing.values()) row.remove();
   for (const [index, row] of next.entries()) {
@@ -522,7 +874,7 @@ function renderItems(items) {
   if (preview && !preview.trigger.isConnected) {
     const index = items.findIndex((item) => item.id === preview.item.id);
     if (index < 0) closePreview();
-    else openPreview(items[index], next[index].querySelector('.preview-trigger'), { focus: false });
+    else openPreview(items[index], itemRows[index].querySelector('.preview-trigger'), { focus: false });
   }
 }
 
@@ -627,12 +979,12 @@ function accountDialog(mode, afterSignIn) {
 function splitName(name) {
   const index = name.lastIndexOf('.');
   if (index <= 0 || index === name.length - 1) return { base: name, ext: '' };
-  return { base: name.slice(0, index), ext: name.slice(index) };
+  return { base: name.slice(0, index), ext: name.slice(index + 1) };
 }
 
 function extensionValue(value) {
-  const ext = (value || '').trim().replace(/\s+/g, '');
-  return ext && !ext.startsWith('.') ? '.' + ext : ext;
+  const ext = (value || '').trim().replace(/\s+/g, '').replace(/^\.+/, '');
+  return ext ? '.' + ext : '';
 }
 
 function nameDialog(mode, item) {
@@ -646,7 +998,7 @@ function nameDialog(mode, item) {
     <form class="dialog-form">
       ${split ? `<div class="name-split">
         <label>File name<input name="base" maxlength="150" required autofocus></label>
-        <label>Extension<input name="ext" maxlength="20" placeholder=".txt"></label>
+        <label>Extension<input name="ext" maxlength="20" placeholder="txt"></label>
       </div>` : `<label>${renaming ? 'Name' : 'Folder name'}<input name="name" maxlength="150" required autofocus></label>`}
       <div class="dialog-actions"><button type="button" class="button cancel-dialog">Cancel</button><button class="button primary" type="submit">${renaming ? 'Save name' : 'Create folder'}</button></div>
     </form>`);
@@ -1087,6 +1439,9 @@ $('#ip-register-form').addEventListener('submit', submitIpRegister);
 $('#ip-login-form').addEventListener('submit', submitIpLogin);
 $('#close-dialog').addEventListener('click', () => dialog.close());
 $('#close-preview').addEventListener('click', () => closePreview({ restoreFocus: true }));
+document.addEventListener('click', (event) => {
+  if (state.preview && !previewPanel.contains(event.target)) closePreview();
+}, { capture: true });
 contextMenu.addEventListener('keydown', (event) => {
   const items = [...contextMenu.querySelectorAll('[role="menuitem"]')];
   const index = items.indexOf(document.activeElement);
@@ -1134,6 +1489,45 @@ let fileDragDepth = 0;
 const dropHint = $('#drop-hint');
 const hasFiles = (event) => event.dataTransfer?.types.includes('Files');
 const canDropFiles = () => Boolean(state.account && state.folder && !state.uploading);
+const itemDragType = 'application/x-firesend-item';
+let draggedItem;
+let dropTarget;
+
+function showDropTarget(target = null) {
+  if (dropTarget === target) return;
+  dropTarget?.classList.remove('is-drop-target');
+  dropTarget = target;
+  dropTarget?.classList.add('is-drop-target');
+}
+
+function itemDropTarget(event) {
+  if (!draggedItem || state.folder?.id !== draggedItem.source || !event.dataTransfer.types.includes(itemDragType)) {
+    return null;
+  }
+  const row = event.target.closest('[data-drop-folder]');
+  return row && row.dataset.dropFolder !== draggedItem.id ? row : null;
+}
+
+$('#items').addEventListener('dragstart', (event) => {
+  const id = event.target.closest('tr[draggable="true"]')?.dataset.itemId;
+  if (!id || !state.folder || event.target.closest('a')) return;
+  draggedItem = { id, source: state.folder.id };
+  event.dataTransfer.setData(itemDragType, id);
+  event.dataTransfer.effectAllowed = 'move';
+});
+
+async function moveDroppedItem(item, target) {
+  try {
+    showError(pageError);
+    await request(`/items/${encodeURIComponent(item.id)}`, {
+      method: 'PATCH', body: { parentId: target.dataset.dropFolder },
+    });
+    notice(`Moved to ${target.dataset.dropName}.`);
+    if (state.folder?.id === item.source) await loadFolder(item.source, { refresh: true });
+  } catch (error) {
+    showError(pageError, error.message);
+  }
+}
 
 function clearFileDrag() {
   fileDragDepth = 0;
@@ -1147,22 +1541,47 @@ document.addEventListener('dragenter', (event) => {
   dropHint.hidden = !canDropFiles();
 });
 document.addEventListener('dragover', (event) => {
+  if (draggedItem) {
+    const target = itemDropTarget(event);
+    showDropTarget(target);
+    if (target) {
+      event.preventDefault();
+      event.dataTransfer.dropEffect = 'move';
+    }
+    return;
+  }
   if (!hasFiles(event)) return;
   event.preventDefault();
   const canDrop = canDropFiles();
   event.dataTransfer.dropEffect = canDrop ? 'copy' : 'none';
   dropHint.hidden = !canDrop;
 });
-document.addEventListener('dragleave', () => {
+document.addEventListener('dragleave', (event) => {
+  if (dropTarget?.contains(event.target) && !dropTarget.contains(event.relatedTarget)) showDropTarget();
   if (fileDragDepth > 0 && --fileDragDepth === 0) dropHint.hidden = true;
 });
 document.addEventListener('drop', (event) => {
   clearFileDrag();
+  if (draggedItem) {
+    const target = itemDropTarget(event);
+    const item = draggedItem;
+    draggedItem = null;
+    showDropTarget();
+    if (target && event.dataTransfer.getData(itemDragType) === item.id) {
+      event.preventDefault();
+      moveDroppedItem(item, target);
+    }
+    return;
+  }
   if (!hasFiles(event)) return;
   event.preventDefault();
   if (canDropFiles()) uploadFiles([...event.dataTransfer.files]);
 });
-document.addEventListener('dragend', clearFileDrag);
+document.addEventListener('dragend', () => {
+  clearFileDrag();
+  draggedItem = null;
+  showDropTarget();
+});
 window.addEventListener('blur', clearFileDrag);
 setInterval(syncFolder, 2500);
 document.addEventListener('visibilitychange', syncFolder);

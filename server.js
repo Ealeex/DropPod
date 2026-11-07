@@ -1,7 +1,7 @@
 const express = require('express');
 const multer = require('multer');
-const { randomUUID } = require('node:crypto');
-const { mkdirSync } = require('node:fs');
+const { createHash, randomUUID } = require('node:crypto');
+const { mkdirSync, readFileSync } = require('node:fs');
 const { unlink } = require('node:fs/promises');
 const path = require('node:path');
 const { loadConfig } = require('./config-loader');
@@ -11,6 +11,7 @@ const app = express();
 const port = Number(process.env.PORT) || 3001;
 const data = path.resolve(process.env.FIRESEND_DATA_DIR || path.join(__dirname, '.data'));
 const uploads = path.join(data, 'uploads');
+const driveHtml = path.join(__dirname, 'public', 'drive.html');
 
 try {
   process.loadEnvFile(path.join(__dirname, '.env'));
@@ -24,6 +25,20 @@ if (authMode === 'passphrase' && !passphrase) {
   console.error('PASSPHRASE must be set in .env (or the environment) when auth-mode is "passphrase".');
   process.exit(1);
 }
+
+const contentSecurityPolicy = (() => {
+  const base = "default-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'";
+  try {
+    const html = readFileSync(driveHtml, 'utf8').replace(/\r\n?/g, '\n');
+    const importMap = html.match(/<script type="importmap">([\s\S]*?)<\/script>/)?.[1];
+    if (!importMap) return base;
+    const hash = createHash('sha256').update(importMap).digest('base64');
+    return `default-src 'self'; script-src 'self' 'sha256-${hash}'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'`;
+  } catch (error) {
+    console.error('Could not prepare the page security policy:', error.message);
+    return base;
+  }
+})();
 
 mkdirSync(uploads, { recursive: true });
 
@@ -46,7 +61,7 @@ app.disable('x-powered-by');
 app.use((req, res, next) => {
   res.set('X-Content-Type-Options', 'nosniff');
   res.set('Referrer-Policy', 'no-referrer');
-  res.set('Content-Security-Policy', "default-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'");
+  res.set('Content-Security-Policy', contentSecurityPolicy);
   next();
 });
 app.use('/api', (req, res, next) => {
@@ -74,7 +89,8 @@ app.get('/config.js', (req, res) => {
   if (meta) meta.content = theme === 'graphite' ? '#101112' : '#0b2633';
 })();`);
 });
-app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'public', 'drive.html')));
+app.get('/', (req, res) => res.sendFile(driveHtml));
+app.use('/vendor/three', express.static(path.join(__dirname, 'node_modules', 'three'), { maxAge: '1h' }));
 app.use(express.static(path.join(__dirname, 'public')));
 app.use('/api', (req, res) => res.status(404).json({ error: 'Not found.' }));
 

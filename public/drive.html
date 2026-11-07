@@ -8,6 +8,9 @@
   <title>FireSend · Shared drive</title>
   <link rel="icon" href="/mark.svg" type="image/svg+xml">
   <script src="/config.js"></script>
+  <script type="importmap">
+    {"imports":{"three":"/vendor/three/build/three.module.js","three/addons/":"/vendor/three/examples/jsm/"}}
+  </script>
   <link rel="stylesheet" href="/drive.css">
   <script src="/drive.js" defer></script>
 </head>
@@ -69,7 +72,7 @@
       <section class="file-panel" aria-label="Files and folders">
         <div class="file-table" id="file-table" hidden>
           <table>
-            <thead><tr><th scope="col">Name</th><th scope="col" class="date-column">Modified</th><th scope="col" class="size-column">Size</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead>
+            <thead><tr><th scope="col">Name</th><th scope="col" class="owner-column">Added by</th><th scope="col" class="date-column">Modified</th><th scope="col" class="size-column">Size</th><th scope="col"><span class="sr-only">Actions</span></th></tr></thead>
             <tbody id="items"></tbody>
           </table>
         </div>
@@ -84,6 +87,7 @@
     </div>
   </main>
   <aside id="preview-panel" class="preview-panel" aria-labelledby="preview-name" aria-hidden="true" inert>
+    <div id="preview-resize" class="preview-resize" role="separator" aria-orientation="vertical" aria-label="Preview width" aria-controls="preview-content" tabindex="0"></div>
     <div class="preview-header">
       <h2 id="preview-name"></h2>
       <button id="close-preview" type="button" class="icon-button" aria-label="Close preview" title="Close preview"><svg aria-hidden="true"><use href="/icons.svg#close"></use></svg></button>

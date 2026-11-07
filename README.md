@@ -15,6 +15,12 @@ Open [FireSend](http://localhost:3001). On another device, use the host computer
 
 After signing in, members can browse the drive, preview files, upload, download, create folders, rename items, and move or delete them. Changes appear automatically in open folders. FireSend does not set a per-file upload cap. Keep the server reachable only from the group’s trusted network. The default server uses HTTP.
 
+Drag a drive item onto another folder to move it there. In a subfolder, drop an item on the `..` row to move it up one level.
+
+Images, audio, video, text, and Blender/COLLADA (`.dae`) models can be previewed. A `.dae` model is shown as a rotatable 3D view, and uses a texture image from the same drive folder as its albedo map. `.zip` and `.7z` archives open as a browsable file list, and previewable entries can be opened from there. Archive browsing uses the 7-Zip command-line tool on the host; set `SEVEN_ZIP_PATH` if `7z` is not in a standard location.
+
+Drag the left edge of the preview drawer to resize it, or click outside to close it. The drive list shows small image and video thumbnails. Video thumbnails use a frame 25% into the clip when its duration is available. FFmpeg generates these thumbnails and browser-compatible previews for uploaded formats such as MOV, MKV, AVI, FLAC, and TIFF. The first preview of a large file can take time to generate. The server uses FFmpeg and FFprobe from `tools/ffmpeg/bin` when present, or from the host's PATH. A fresh checkout needs its own copy of those tools.
+
 ## Configuration
 
 Edit `config.jsonc` in the project folder and restart the server:

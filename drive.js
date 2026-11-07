@@ -2,9 +2,11 @@ const express = require('express');
 const { DatabaseSync } = require('node:sqlite');
 const { createHash, randomBytes, randomUUID, scrypt, timingSafeEqual } = require('node:crypto');
 const { promisify } = require('node:util');
-const { mkdirSync } = require('node:fs');
+const { execFile, spawn } = require('node:child_process');
+const { existsSync, mkdirSync } = require('node:fs');
 const path = require('node:path');
 const { open, unlink } = require('node:fs/promises');
+const { createMediaPreviews } = require('./media-preview');
 
 const deriveKey = promisify(scrypt);
 const sessionCookie = 'firesend_session';
@@ -22,11 +24,148 @@ const previewFormats = new Map(Object.entries({
   '.mp4': 'video/mp4', '.webm': 'video/webm',
   '.txt': 'text/plain', '.md': 'text/plain', '.csv': 'text/plain', '.tsv': 'text/plain',
   '.json': 'text/plain', '.log': 'text/plain', '.gltf': 'text/plain',
+  '.dae': 'model/vnd.collada+xml',
 }));
+const archiveFormats = new Map(Object.entries({ '.zip': 'zip', '.7z': '7z' }));
+const convertedFormats = new Map([
+  ...['.mov', '.mkv', '.avi', '.wmv', '.asf', '.flv', '.m4v', '.mpg', '.mpeg', '.ts', '.mts', '.m2ts', '.3gp', '.3g2', '.ogv']
+    .map((extension) => [extension, 'video']),
+  ...['.flac', '.aac', '.aif', '.aiff', '.wma', '.opus', '.oga', '.caf', '.au', '.amr', '.ape', '.ac3', '.eac3', '.wv']
+    .map((extension) => [extension, 'audio']),
+  ...['.tif', '.tiff', '.heic', '.heif', '.jxl', '.jp2', '.psd', '.qoi']
+    .map((extension) => [extension, 'image']),
+]);
+const compatibleMediaTypes = new Map([['image', 'image/png'], ['audio', 'audio/mp4'], ['video', 'video/mp4']]);
 const maxTextPreview = 128 * 1024;
+const maxArchiveEntry = 64 * 1024 * 1024;
+const maxArchiveEntries = 50_000;
 
 function previewFormat(name) {
   return previewFormats.get(path.extname(name).toLowerCase());
+}
+
+function archiveFormat(name) {
+  return archiveFormats.get(path.extname(name).toLowerCase()) || null;
+}
+
+function previewKind(name, { archiveEntry = false } = {}) {
+  if (archiveFormat(name)) return 'archive';
+  const format = previewFormat(name);
+  if (!format) return archiveEntry ? null : convertedFormats.get(path.extname(name).toLowerCase()) || null;
+  if (format === 'model/vnd.collada+xml') return 'model';
+  return format.split('/')[0];
+}
+
+function resolveSevenZip() {
+  const configured = process.env.SEVEN_ZIP_PATH;
+  const candidates = [];
+  if (configured) candidates.push(configured);
+  if (process.platform === 'win32') {
+    const roots = [process.env.ProgramFiles, process.env['ProgramFiles(x86)'], process.env.ProgramW6432];
+    for (const root of roots.filter(Boolean)) candidates.push(path.join(root, '7-Zip', '7z.exe'));
+  } else {
+    candidates.push('/usr/bin/7zz', '/usr/bin/7z', '/usr/local/bin/7zz', '/usr/local/bin/7z');
+  }
+  return candidates.find((candidate) => existsSync(candidate)) || (process.platform === 'win32' ? '7z.exe' : '7z');
+}
+
+function runSevenZip(command, args, { maxBuffer = 32 * 1024 * 1024 } = {}) {
+  return new Promise((resolve, reject) => {
+    execFile(command, args, {
+      encoding: 'utf8', maxBuffer, timeout: 60_000, windowsHide: true,
+    }, (error, stdout, stderr) => {
+      if (error) {
+        error.output = (stderr || stdout || '').trim();
+        return reject(error);
+      }
+      resolve(stdout);
+    });
+  });
+}
+
+function parseArchiveListing(output) {
+  const records = [];
+  let record = null;
+  for (const line of output.split(/\r?\n/)) {
+    if (!line.trim()) {
+      if (record) records.push(record);
+      record = null;
+      continue;
+    }
+    const separator = line.indexOf(' = ');
+    if (separator < 0) continue;
+    record ??= {};
+    record[line.slice(0, separator).trim()] = line.slice(separator + 3);
+  }
+  if (record) records.push(record);
+
+  const entries = [];
+  for (const item of records) {
+    if (!item.Path) continue;
+    const name = item.Path.split(/[\\/]/).pop() || item.Path;
+    // The 7z format reports directories in Attributes instead of Folder.
+    const folder = item.Folder === '+' || (item.Folder === undefined && item.Attributes?.startsWith('D'));
+    const size = Number(item.Size) || 0;
+    const kind = folder ? null : previewKind(name, { archiveEntry: true });
+    const preview = kind === 'model' || kind === 'archive' ? null : kind;
+    entries.push({
+      path: item.Path,
+      name,
+      folder,
+      size,
+      modified: item.Modified || null,
+      encrypted: item.Encrypted === '+',
+      preview,
+      previewTruncated: preview === 'text' && size > maxTextPreview,
+    });
+    if (entries.length >= maxArchiveEntries) break;
+  }
+  entries.sort((a, b) => (a.folder === b.folder ? a.path.localeCompare(b.path) : a.folder ? -1 : 1));
+  return entries;
+}
+
+function extractArchiveEntry(command, archivePath, entry) {
+  return new Promise((resolve, reject) => {
+    const maxBytes = entry.preview === 'text' ? maxTextPreview : maxArchiveEntry;
+    const child = spawn(command, [
+      'x', '-so', '-bd', '-y', '-spd', '-sccUTF-8', '--', archivePath, entry.path,
+    ], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    const chunks = [];
+    let size = 0;
+    let errorText = '';
+    let reachedLimit = false;
+    let timedOut = false;
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      child.kill('SIGKILL');
+    }, 60_000);
+
+    child.stdout.on('data', (chunk) => {
+      if (reachedLimit) return;
+      const remaining = maxBytes - size;
+      const piece = chunk.subarray(0, remaining);
+      chunks.push(piece);
+      size += piece.length;
+      if (chunk.length > remaining) {
+        reachedLimit = true;
+        child.kill('SIGKILL');
+      }
+    });
+    child.stderr.setEncoding('utf8');
+    child.stderr.on('data', (chunk) => { errorText = (errorText + chunk).slice(-4096); });
+    child.on('error', (error) => {
+      clearTimeout(timeout);
+      reject(error);
+    });
+    child.on('close', (code) => {
+      clearTimeout(timeout);
+      if (timedOut) return reject(new Error('7-Zip extraction timed out.'));
+      if (reachedLimit && !entry.previewTruncated) return reject(new Error('Archive entry exceeded the preview limit.'));
+      if (code === 0 || reachedLimit) return resolve(Buffer.concat(chunks, size));
+      const detail = errorText.trim().split(/\r?\n/).filter(Boolean).at(-1);
+      reject(new Error(detail || `7-Zip exited with code ${code}.`));
+    });
+  });
 }
 
 function openDrive(data) {
@@ -63,6 +202,7 @@ function openDrive(data) {
       name TEXT NOT NULL,
       name_key TEXT NOT NULL,
       size INTEGER,
+      created_by TEXT,
       updated_at INTEGER NOT NULL,
       UNIQUE (parent_id, name_key)
     );
@@ -76,6 +216,10 @@ function openDrive(data) {
       VALUES ('root', NULL, 'folder', 'Shared drive', 'shared drive', 0);
     INSERT OR IGNORE INTO drive_categories (id, position) VALUES ('root', 0);
   `);
+  const itemColumns = db.prepare('PRAGMA table_info(drive_items)').all();
+  if (!itemColumns.some((column) => column.name === 'created_by')) {
+    db.exec('ALTER TABLE drive_items ADD COLUMN created_by TEXT');
+  }
   return db;
 }
 
@@ -115,6 +259,7 @@ function createDriveRouter({ data, uploads, upload, removeBlob, authMode = 'acco
   const ipSessions = new Map();
   const router = express.Router();
   const db = openDrive(data);
+  const mediaPreviews = createMediaPreviews(data, uploads);
   const getItem = db.prepare('SELECT * FROM drive_items WHERE id = ?');
   const getCategories = db.prepare(`
     SELECT c.id, i.name, c.position
@@ -126,8 +271,8 @@ function createDriveRouter({ data, uploads, upload, removeBlob, authMode = 'acco
   const removeSession = db.prepare('DELETE FROM drive_sessions WHERE token_hash = ?');
   const removeExpired = db.prepare('DELETE FROM drive_sessions WHERE expires_at <= ?');
   const insertItem = db.prepare(`
-    INSERT INTO drive_items (id, parent_id, kind, name, name_key, size, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT (parent_id, name_key) DO NOTHING
+    INSERT INTO drive_items (id, parent_id, kind, name, name_key, size, created_by, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (parent_id, name_key) DO NOTHING
   `);
   const getLineage = db.prepare(`
     WITH RECURSIVE lineage(id, parent_id, name, depth) AS (
@@ -137,6 +282,16 @@ function createDriveRouter({ data, uploads, upload, removeBlob, authMode = 'acco
     )
     SELECT id, name FROM lineage ORDER BY depth DESC
   `);
+  const sevenZip = resolveSevenZip();
+
+  function archivePath(file) {
+    return path.join(uploads, file.id);
+  }
+
+  async function listArchive(file) {
+    const output = await runSevenZip(sevenZip, ['l', '-slt', '-ba', '-sccUTF-8', '--', archivePath(file)]);
+    return parseArchiveListing(output);
+  }
 
   const descendants = `
     WITH RECURSIVE descendants(id) AS (
@@ -153,22 +308,28 @@ function createDriveRouter({ data, uploads, upload, removeBlob, authMode = 'acco
   const pendingCleanup = db.prepare('SELECT id FROM drive_blob_cleanup');
   const finishCleanup = db.prepare('DELETE FROM drive_blob_cleanup WHERE id = ?');
   let cleaning = false;
+  let cleanupRequested = false;
 
   async function cleanDeletedFiles() {
+    cleanupRequested = true;
     if (cleaning) return;
     cleaning = true;
     try {
-      for (const { id } of pendingCleanup.all()) {
-        try {
-          await unlink(path.join(uploads, id));
-        } catch (error) {
-          if (error.code !== 'ENOENT') {
+      do {
+        cleanupRequested = false;
+        for (const { id } of pendingCleanup.all()) {
+          try {
+            await mediaPreviews.remove(id);
+            await unlink(path.join(uploads, id)).catch((error) => {
+              if (error.code !== 'ENOENT') throw error;
+            });
+          } catch (error) {
             console.error(error);
             continue;
           }
+          finishCleanup.run(id);
         }
-        finishCleanup.run(id);
-      }
+      } while (cleanupRequested);
     } finally {
       cleaning = false;
     }
@@ -194,6 +355,12 @@ function createDriveRouter({ data, uploads, upload, removeBlob, authMode = 'acco
   function clientIp(req) {
     const address = req.ip || req.socket?.remoteAddress || 'unknown';
     return address.startsWith('::ffff:') ? address.slice(7) : address;
+  }
+
+  function actorName(req) {
+    if (accountsEnabled) return req.driveAccount?.username || 'Unknown';
+    if (ipMode) return getIpUser.get(clientIp(req))?.name || 'Unknown';
+    return 'Shared drive';
   }
 
   function hasPassphrase(req) {
@@ -422,10 +589,10 @@ function createDriveRouter({ data, uploads, upload, removeBlob, authMode = 'acco
     let committed = false;
     try {
       const result = db.prepare(`
-        INSERT INTO drive_items (id, kind, name, name_key, updated_at)
-        VALUES (?, 'folder', ?, ?, ?)
+        INSERT INTO drive_items (id, kind, name, name_key, created_by, updated_at)
+        VALUES (?, 'folder', ?, ?, ?, ?)
         ON CONFLICT (name_key) WHERE parent_id IS NULL DO NOTHING
-      `).run(id, name, name.toLowerCase(), Date.now());
+      `).run(id, name, name.toLowerCase(), actorName(req), Date.now());
       if (!result.changes) return res.status(409).json({ error: 'A category with that name already exists.' });
       db.prepare(`
         INSERT INTO drive_categories (id, position)
@@ -480,13 +647,15 @@ function createDriveRouter({ data, uploads, upload, removeBlob, authMode = 'acco
     const folder = getItem.get(req.params.id);
     if (folder?.kind !== 'folder') return res.status(404).json({ error: 'Folder not found.' });
     const items = db.prepare(`
-      SELECT id, kind, name, size, updated_at AS updatedAt FROM drive_items
+      SELECT id, kind, name, size, created_by AS createdBy, updated_at AS updatedAt FROM drive_items
       WHERE parent_id = ? ORDER BY kind DESC, name_key, id
     `).all(folder.id);
     for (const item of items) {
       if (item.kind !== 'file') continue;
-      const format = previewFormat(item.name);
-      item.preview = format?.split('/')[0] || null;
+      item.preview = previewKind(item.name);
+      if (item.preview && !previewFormat(item.name) && compatibleMediaTypes.has(item.preview)) {
+        item.convertPreview = true;
+      }
       item.previewTruncated = item.preview === 'text' && item.size > maxTextPreview;
     }
     const categories = getCategories.all().map(({ id, name }) => ({ id, name }));
@@ -499,7 +668,7 @@ function createDriveRouter({ data, uploads, upload, removeBlob, authMode = 'acco
     const name = itemName(req.body?.name);
     if (!name) return res.status(400).json({ error: 'Enter a folder name of up to 150 characters without slashes.' });
     const id = randomUUID();
-    if (!insertItem.run(id, folder.id, 'folder', name, name.toLowerCase(), null, Date.now()).changes) {
+    if (!insertItem.run(id, folder.id, 'folder', name, name.toLowerCase(), null, actorName(req), Date.now()).changes) {
       return res.status(409).json({ error: 'An item with that name already exists here.' });
     }
     res.status(201).json({ id });
@@ -568,7 +737,7 @@ function createDriveRouter({ data, uploads, upload, removeBlob, authMode = 'acco
           await removeBlob(id);
           return res.status(404).json({ error: 'This folder was deleted during the upload.' });
         }
-        if (!insertItem.run(id, folder.id, 'file', name, name.toLowerCase(), size, Date.now()).changes) {
+        if (!insertItem.run(id, folder.id, 'file', name, name.toLowerCase(), size, actorName(req), Date.now()).changes) {
           await removeBlob(id);
           return res.status(409).json({ error: 'An item with that name already exists here.' });
         }
@@ -580,10 +749,84 @@ function createDriveRouter({ data, uploads, upload, removeBlob, authMode = 'acco
     });
   });
 
+  router.get('/files/:id/archive', async (req, res) => {
+    const file = getItem.get(req.params.id);
+    if (file?.kind !== 'file') return res.status(404).json({ error: 'File not found.' });
+    const format = archiveFormat(file.name);
+    if (!format) return res.status(415).json({ error: 'Archive preview is unavailable for this file type.' });
+    try {
+      const entries = await listArchive(file);
+      const totalSize = entries.reduce((sum, entry) => sum + (entry.folder ? 0 : entry.size), 0);
+      res.json({ format, entries, totalSize });
+    } catch (error) {
+      if (error.code === 'ENOENT') {
+        return res.status(501).json({ error: 'Archive viewing requires 7-Zip on the server.' });
+      }
+      console.error(error);
+      res.status(422).json({ error: 'This archive could not be read. It may be encrypted or damaged.' });
+    }
+  });
+
+  router.get('/files/:id/archive/entry', async (req, res) => {
+    const file = getItem.get(req.params.id);
+    if (file?.kind !== 'file') return res.status(404).json({ error: 'File not found.' });
+    if (!archiveFormat(file.name)) return res.status(415).json({ error: 'Archive preview is unavailable for this file type.' });
+    const entryPath = typeof req.query.path === 'string' ? req.query.path : '';
+    if (!entryPath || entryPath.length > 4096 || /[\x00\r\n]/.test(entryPath)) {
+      return res.status(400).json({ error: 'Choose a valid archive entry.' });
+    }
+    try {
+      const entries = await listArchive(file);
+      const entry = entries.find((candidate) => !candidate.folder && candidate.path === entryPath);
+      if (!entry) return res.status(404).json({ error: 'Archive entry not found.' });
+      if (entry.encrypted) return res.status(422).json({ error: 'This archive entry is encrypted.' });
+      if (entry.preview !== 'text' && entry.size > maxArchiveEntry) {
+        return res.status(413).json({ error: 'This archive entry is too large to preview.' });
+      }
+      const buffer = await extractArchiveEntry(sevenZip, archivePath(file), entry);
+      res.set('Content-Security-Policy', "default-src 'none'; sandbox");
+      res.type(previewFormat(entry.name) || 'application/octet-stream');
+      res.send(buffer);
+    } catch (error) {
+      if (error.code === 'ENOENT') {
+        return res.status(501).json({ error: 'Archive viewing requires 7-Zip on the server.' });
+      }
+      console.error(error);
+      res.status(422).json({ error: 'This archive entry could not be read.' });
+    }
+  });
+
+  async function sendMediaPreview(res, file, type, kind, contentType) {
+    try {
+      const generated = await mediaPreviews.get(file.id, type, kind);
+      if (res.destroyed) return;
+      if (!getItem.get(file.id)) return res.sendStatus(404);
+      res.set('Content-Security-Policy', "default-src 'none'; sandbox");
+      res.type(contentType);
+      res.sendFile(generated, { cacheControl: false });
+    } catch (error) {
+      if (res.destroyed) return;
+      if (error.code === 'ENOENT') return res.status(503).json({ error: 'Media conversion requires FFmpeg and FFprobe.' });
+      res.status(422).json({ error: 'This media file could not be converted for preview.' });
+    }
+  }
+
+  router.get('/files/:id/thumbnail', async (req, res) => {
+    const file = getItem.get(req.params.id);
+    if (file?.kind !== 'file') return res.sendStatus(404);
+    const kind = previewKind(file.name);
+    if (kind !== 'image' && kind !== 'video') return res.sendStatus(415);
+    await sendMediaPreview(res, file, 'thumbnail', kind, 'image/jpeg');
+  });
+
   router.get('/files/:id/preview', async (req, res) => {
     const file = getItem.get(req.params.id);
     if (file?.kind !== 'file') return res.status(404).json({ error: 'File not found.' });
     const format = previewFormat(file.name);
+    const kind = previewKind(file.name);
+    if ((!format || req.query.compatible === '1') && compatibleMediaTypes.has(kind)) {
+      return sendMediaPreview(res, file, kind, kind, compatibleMediaTypes.get(kind));
+    }
     if (!format) return res.status(415).json({ error: 'Preview is unavailable for this file type.' });
     res.set('Content-Security-Policy', "default-src 'none'; sandbox");
     res.type(format);
