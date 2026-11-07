@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { ColladaLoader } from 'three/addons/loaders/ColladaLoader.js';
+import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
 import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
 import { MTLLoader } from 'three/addons/loaders/MTLLoader.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
@@ -48,7 +49,7 @@ export async function loadObjMaterials(text, files) {
   return materials.join('\n');
 }
 
-export function createModelPreview({ text, name, files = [], materials = '' }) {
+export function createModelPreview({ text, buffer, name, files = [], materials = '' }) {
   const container = document.createElement('div');
   container.className = 'model-viewer';
   container.setAttribute('role', 'img');
@@ -65,7 +66,13 @@ export function createModelPreview({ text, name, files = [], materials = '' }) {
   }
 
   const isObj = /\.obj$/i.test(name);
-  const missing = new Set(isObj ? [] : textureNames(text).filter((reference) => !textureUrls.has(reference)));
+  const isFbx = /\.fbx$/i.test(name);
+  const missing = new Set(isObj || isFbx ? [] : textureNames(text).filter((reference) => !textureUrls.has(reference)));
+  const embeddedUrls = new Set();
+  function releaseEmbeddedTextures() {
+    for (const url of embeddedUrls) URL.revokeObjectURL(url);
+    embeddedUrls.clear();
+  }
 
   const hint = document.createElement('p');
   hint.className = 'model-hint';
@@ -73,16 +80,29 @@ export function createModelPreview({ text, name, files = [], materials = '' }) {
   container.append(hint);
 
   const manager = new THREE.LoadingManager();
+  manager.onLoad = releaseEmbeddedTextures;
   manager.setURLModifier((url) => {
+    if (isFbx && url.startsWith(`blob:${location.origin}/`)) {
+      embeddedUrls.add(url);
+      return url;
+    }
+    if (isFbx && /^data:image\/(?:bmp|jpeg|png|webp);base64,/i.test(url)) return url;
     if (url.startsWith('data:') || url.startsWith('blob:')) return blankTexture;
     const fileName = referenceName(url);
     const texture = textureUrls.get(fileName);
-    if (!texture && isObj && fileName) missing.add(fileName);
+    if (!texture && (isObj || isFbx) && fileName) missing.add(fileName);
     return texture || blankTexture;
   });
 
   const subject = new THREE.Group();
-  if (isObj) {
+  if (isFbx) {
+    try {
+      subject.add(new FBXLoader(manager).parse(buffer, ''));
+    } catch (error) {
+      releaseEmbeddedTextures();
+      throw error;
+    }
+  } else if (isObj) {
     const loader = new OBJLoader(manager);
     if (materials) {
       const creator = new MTLLoader(manager).parse(materials, '');
@@ -183,6 +203,7 @@ export function createModelPreview({ text, name, files = [], materials = '' }) {
       if (disposed) return;
       disposed = true;
       renderer.setAnimationLoop(null);
+      releaseEmbeddedTextures();
       observer.disconnect();
       controls.dispose();
       scene.traverse((object) => {

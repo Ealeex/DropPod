@@ -25,6 +25,7 @@ const previewFormats = new Map(Object.entries({
   '.txt': 'text/plain', '.md': 'text/plain', '.csv': 'text/plain', '.tsv': 'text/plain',
   '.json': 'text/plain', '.log': 'text/plain', '.gltf': 'text/plain',
   '.dae': 'model/vnd.collada+xml', '.obj': 'model/obj', '.mtl': 'text/plain', '.pdf': 'application/pdf',
+  '.fbx': 'model/fbx',
 }));
 const codeLanguages = new Map(Object.entries({
   '.js': 'javascript', '.mjs': 'javascript', '.cjs': 'javascript', '.jsx': 'javascript',
@@ -386,6 +387,7 @@ function createDriveRouter({ data, uploads, upload, removeBlob, authMode = 'acco
     SELECT id FROM drive_items WHERE kind = 'file' AND id IN (SELECT id FROM descendants)
   `);
   const deleteTree = db.prepare(descendants + 'DELETE FROM drive_items WHERE id IN (SELECT id FROM descendants)');
+  const removeCategory = db.prepare('DELETE FROM drive_categories WHERE id = ?');
   const pendingCleanup = db.prepare('SELECT id FROM drive_blob_cleanup');
   const finishCleanup = db.prepare('DELETE FROM drive_blob_cleanup WHERE id = ?');
   let cleaning = false;
@@ -866,13 +868,20 @@ function createDriveRouter({ data, uploads, upload, removeBlob, authMode = 'acco
     res.sendStatus(204);
   });
 
-  router.delete('/items/:id', (req, res) => {
+  function deleteItem(req, res, category) {
     db.exec('BEGIN IMMEDIATE');
     let committed = false;
     try {
       const item = getItem.get(req.params.id);
-      if (!item) return res.status(404).json({ error: 'Item not found.' });
-      if (item.parent_id === null) return res.status(400).json({ error: 'Categories cannot be deleted here.' });
+      if (category) {
+        if (item?.id === 'root') return res.status(400).json({ error: 'The default drive category cannot be deleted.' });
+        if (!item || !removeCategory.run(item.id).changes) {
+          return res.status(404).json({ error: 'Category not found.' });
+        }
+      } else {
+        if (!item) return res.status(404).json({ error: 'Item not found.' });
+        if (item.parent_id === null) return res.status(400).json({ error: 'Categories cannot be deleted here.' });
+      }
       queueDeletedFiles.run(item.id);
       deleteTree.run(item.id);
       db.exec('COMMIT');
@@ -882,7 +891,10 @@ function createDriveRouter({ data, uploads, upload, removeBlob, authMode = 'acco
     }
     cleanDeletedFiles().catch(console.error);
     res.sendStatus(204);
-  });
+  }
+
+  router.delete('/items/:id', (req, res) => deleteItem(req, res, false));
+  router.delete('/categories/:id', (req, res) => deleteItem(req, res, true));
 
   router.post('/folders/:id/files', (req, res, next) => {
     const folder = getItem.get(req.params.id);

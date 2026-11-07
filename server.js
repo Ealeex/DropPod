@@ -27,13 +27,13 @@ if (authMode === 'passphrase' && !passphrase) {
 }
 
 const contentSecurityPolicy = (() => {
-  const base = "default-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'";
+  const base = "default-src 'self'; img-src 'self' blob: data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'";
   try {
     const html = readFileSync(driveHtml, 'utf8').replace(/\r\n?/g, '\n');
     const importMap = html.match(/<script type="importmap">([\s\S]*?)<\/script>/)?.[1];
     if (!importMap) return base;
     const hash = createHash('sha256').update(importMap).digest('base64');
-    return `default-src 'self'; script-src 'self' 'sha256-${hash}'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'`;
+    return `${base}; script-src 'self' 'sha256-${hash}'`;
   } catch (error) {
     console.error('Could not prepare the page security policy:', error.message);
     return base;

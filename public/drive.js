@@ -660,20 +660,22 @@ async function openArchivePreview(item, preview) {
 async function openModelPreview(item, preview) {
   previewMessage('Loading 3D model…');
   const url = `/api/drive/files/${encodeURIComponent(item.id)}/preview`;
+  const isFbx = /\.fbx$/i.test(item.name);
   try {
     const response = await fetch(url);
     if (!response.ok) {
       if (await handlePreviewAuth(response)) return;
       throw new Error('Preview unavailable.');
     }
-    const text = await response.text();
+    const data = isFbx ? await response.arrayBuffer() : await response.text();
     if (state.preview !== preview) return;
     const { createModelPreview, loadObjMaterials } = await import('./model-viewer.mjs');
     if (state.preview !== preview) return;
     const files = state.folder?.items?.filter((sibling) => sibling.kind === 'file') || [];
-    const materials = /\.obj$/i.test(item.name) ? await loadObjMaterials(text, files) : '';
+    const materials = /\.obj$/i.test(item.name) ? await loadObjMaterials(data, files) : '';
     if (state.preview !== preview) return;
-    const viewer = createModelPreview({ text, name: item.name, files, materials });
+    const model = isFbx ? { buffer: data } : { text: data };
+    const viewer = createModelPreview({ ...model, name: item.name, files, materials });
     if (state.preview !== preview) {
       viewer.dispose();
       return;
@@ -1232,9 +1234,28 @@ function renderCategoryManager() {
     up.disabled = index === 0;
     down.disabled = index === categories.length - 1;
     controls.append(rename, up, down);
+    if (category.id !== rootId) {
+      controls.append(action(`Delete ${category.name}`, 'trash', () => deleteCategoryDialog(category)));
+    }
     row.append(name, controls);
     list.append(row);
   });
+}
+
+function deleteCategoryDialog(category) {
+  confirmRemoval('Delete category', `Permanently delete “${category.name}” and all its files and folders?`,
+    () => request(`/categories/${category.id}`, { method: 'DELETE' }),
+    (dialogStillOpen) => {
+      if (dialogStillOpen) openCategoryManager();
+      notice('Category deleted.');
+      const folder = state.folder;
+      if (folder?.path[0]?.id === category.id) {
+        history.replaceState(null, '', folderHref(rootId));
+        loadFolder(rootId, { focus: true });
+      } else if (folder) {
+        loadFolder(folder.id, { refresh: true });
+      }
+    }, openCategoryManager);
 }
 
 async function reorderCategory(id, direction, button) {
