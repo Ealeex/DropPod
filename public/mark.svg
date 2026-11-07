@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 72 72">
+  <defs>
+    <linearGradient id="tile" x2="1" y2="1" gradientUnits="objectBoundingBox"><stop stop-color="#44236c"/><stop offset="1" stop-color="#261445"/></linearGradient>
+    <linearGradient id="fire" x2="0" y2="1" gradientUnits="objectBoundingBox"><stop stop-color="#ffb74f"/><stop offset="1" stop-color="#f45e33"/></linearGradient>
+  </defs>
+  <rect width="72" height="72" rx="17" fill="url(#tile)"/>
+  <path fill="url(#fire)" d="M14 37C8 27 19 23 18 16c5 2 6 6 5 10 5-4 7-12 4-20 9 4 14 11 13 18 3-2 4-5 4-8 6 7 6 14 1 20L20 47z"/>
+  <path fill="#dceaff" d="M10 42 63 18 48 60 33 49 24 56 25 45 54 25 21 47z"/>
+  <path fill="#8599d8" d="m25 45 29-20-21 24-9 7z"/>
+</svg>
