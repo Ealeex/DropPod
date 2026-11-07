@@ -23,9 +23,25 @@ Use **Download** on a file or folder. FireSend packs folders into ZIP files with
 
 Use **Copy share link** on a file or folder to create a direct download link. Anyone who can reach the FireSend server and has the link can download without signing in. To share with another device, open FireSend using the host's network address before copying the link. Folder links download a ZIP of the folder's current contents, and deleting the shared item disables its links.
 
-Images, audio, video, text, and PDFs can be previewed. Source files such as JavaScript, Python, and TypeScript get syntax coloring, and multi-page PDFs have page navigation. COLLADA (`.dae`), Wavefront (`.obj`), and FBX (`.fbx`) models open in a rotatable 3D view. FBX models can use embedded textures. Keep external textures and any OBJ material files (`.mtl`) in the same drive folder. `.zip` and `.7z` archives open as a browsable file list, and previewable entries can be opened from there. Archive browsing uses the 7-Zip command-line tool on the host. Set `SEVEN_ZIP_PATH` if `7z` is not in a standard location.
+Images, audio, video, text, and PDFs can be previewed. Source files such as JavaScript, Python, and TypeScript get syntax coloring, and multi-page PDFs have page navigation. COLLADA (`.dae`), Wavefront (`.obj`), and FBX (`.fbx`) models open in a rotatable 3D view. FBX models can use embedded textures. Keep external textures and any OBJ material files (`.mtl`) in the same drive folder. `.zip` and `.7z` archives open as a browsable file list, and previewable entries can be opened from there.
 
-Drag the left edge of the preview drawer to resize it, or click outside to close it. The drive list shows small image and video thumbnails. Video thumbnails use a frame 25% into the clip when its duration is available. FFmpeg generates these thumbnails and browser-compatible previews for uploaded formats such as MOV, MKV, AVI, FLAC, and TIFF. The first preview of a large file can take time to generate. The server uses FFmpeg and FFprobe from `tools/ffmpeg/bin` when present, or from the host's PATH. A fresh checkout needs its own copy of those tools.
+Drag the left edge of the preview drawer to resize it, or click outside to close it. The drive list shows small image and video thumbnails. Video thumbnails use a frame 25% into the clip when its duration is available. FFmpeg generates these thumbnails and browser-compatible previews for uploaded formats such as MOV, MKV, AVI, FLAC, and TIFF. The first preview of a large file can take time to generate.
+
+### Host tools
+
+Install FFmpeg and 7-Zip on the computer running the FireSend server. On macOS, use Homebrew. [FFmpeg formula](https://formulae.brew.sh/formula/ffmpeg) and [7-Zip formula](https://formulae.brew.sh/formula/sevenzip).
+
+```sh
+brew install ffmpeg sevenzip
+```
+
+FireSend looks for `ffmpeg`, `ffprobe`, and `7zz` or `7z` on the host. It also checks Homebrew's standard bin directories on macOS. Set `FFMPEG_PATH`, `FFPROBE_PATH`, or `SEVEN_ZIP_PATH` in `.env` to point to an executable in a custom location.
+
+On Linux and macOS, FireSend checks these tools at startup. If a tool is missing or cannot run, the server log lists it and gives an install command for Homebrew or the detected Linux distribution. FireSend still starts, so you can install the tools and restart it when ready.
+
+On Windows, FireSend can use `tools/7z.exe` with the adjacent `7z.dll`, and `ffmpeg.exe` and `ffprobe.exe` under `tools/ffmpeg/bin`. The included Windows 7-Zip pair is version 26.05 for x64. See `tools/7zip-LICENSE.txt` and the [upstream downloads](https://www.7-zip.org/download.html).
+
+For a self-contained release, ship native tools and their required libraries in separate platform builds. FireSend checks `tools/<platform>-<arch>/` for bundled executables, such as `tools/darwin-arm64/` for Apple Silicon and `tools/darwin-x64/` for Intel Macs. Restart FireSend after installing or replacing the tools.
 
 ## Configuration
 

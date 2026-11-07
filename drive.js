@@ -3,12 +3,13 @@ const { DatabaseSync } = require('node:sqlite');
 const { createHash, randomBytes, randomUUID, scrypt, timingSafeEqual } = require('node:crypto');
 const { promisify } = require('node:util');
 const { execFile, spawn } = require('node:child_process');
-const { existsSync, mkdirSync } = require('node:fs');
+const { mkdirSync } = require('node:fs');
 const { isIP } = require('node:net');
 const path = require('node:path');
 const { open, unlink } = require('node:fs/promises');
 const { createMediaPreviews } = require('./media-preview');
 const { createDownloads } = require('./downloads');
+const { resolveSevenZip } = require('./tool-paths');
 
 const deriveKey = promisify(scrypt);
 const sessionCookie = 'firesend_session';
@@ -75,19 +76,6 @@ function previewKind(name, { archiveEntry = false } = {}) {
   if (format.startsWith('model/')) return 'model';
   if (format === 'application/pdf') return 'pdf';
   return format.split('/')[0];
-}
-
-function resolveSevenZip() {
-  const configured = process.env.SEVEN_ZIP_PATH;
-  const candidates = [];
-  if (configured) candidates.push(configured);
-  if (process.platform === 'win32') {
-    const roots = [process.env.ProgramFiles, process.env['ProgramFiles(x86)'], process.env.ProgramW6432];
-    for (const root of roots.filter(Boolean)) candidates.push(path.join(root, '7-Zip', '7z.exe'));
-  } else {
-    candidates.push('/usr/bin/7zz', '/usr/bin/7z', '/usr/local/bin/7zz', '/usr/local/bin/7z');
-  }
-  return candidates.find((candidate) => existsSync(candidate)) || (process.platform === 'win32' ? '7z.exe' : '7z');
 }
 
 function runSevenZip(command, args, { maxBuffer = 32 * 1024 * 1024 } = {}) {
@@ -1004,7 +992,7 @@ function createDriveRouter({ data, uploads, upload, removeBlob, authMode = 'acco
       if (!getItem.get(file.id)) return res.sendStatus(404);
       res.set('Content-Security-Policy', "default-src 'none'; sandbox");
       res.type(contentType);
-      res.sendFile(generated, { cacheControl: false });
+      res.sendFile(path.basename(generated), { root: path.dirname(generated), cacheControl: false });
     } catch (error) {
       if (res.destroyed) return;
       if (error.code === 'ENOENT') return res.status(503).json({ error: 'Media conversion requires FFmpeg and FFprobe.' });

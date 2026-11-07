@@ -6,6 +6,7 @@ const { unlink } = require('node:fs/promises');
 const path = require('node:path');
 const { loadConfig } = require('./config-loader');
 const { createDriveRouter } = require('./drive');
+const { warnMissingHostTools } = require('./tool-paths');
 
 const app = express();
 const port = Number(process.env.PORT) || 3001;
@@ -119,5 +120,8 @@ app.use((error, req, res, next) => {
   res.status(500).json({ error: 'Something went wrong. Please try again.' });
 });
 
-const server = app.listen(port, '0.0.0.0', () => console.log(`FireSend is running at http://localhost:${port}`));
+const server = app.listen(port, '0.0.0.0', () => {
+  console.log(`FireSend is running at http://localhost:${port}`);
+  warnMissingHostTools().catch((error) => console.warn(`[FireSend] Could not check host tools. ${error.message}`));
+});
 server.requestTimeout = 0;

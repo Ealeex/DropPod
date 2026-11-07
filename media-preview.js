@@ -3,6 +3,7 @@ const { existsSync, mkdirSync } = require('node:fs');
 const { rename, stat, unlink } = require('node:fs/promises');
 const path = require('node:path');
 const { promisify } = require('node:util');
+const { resolveMediaTool } = require('./tool-paths');
 
 const run = promisify(execFile);
 const inputOptions = [
@@ -15,12 +16,6 @@ const inputOptions = [
 ];
 const outputs = { thumbnail: 'jpg', image: 'png', audio: 'm4a', video: 'mp4' };
 
-function executable(name) {
-  const file = process.platform === 'win32' ? `${name}.exe` : name;
-  const bundled = path.join(__dirname, 'tools', 'ffmpeg', 'bin', file);
-  return existsSync(bundled) ? bundled : file;
-}
-
 function removeIfPresent(file) {
   return unlink(file).catch((error) => {
     if (error.code !== 'ENOENT') throw error;
@@ -30,8 +25,8 @@ function removeIfPresent(file) {
 function createMediaPreviews(data, uploads) {
   const cache = path.join(data, 'media-previews');
   mkdirSync(cache, { recursive: true });
-  const ffmpeg = executable('ffmpeg');
-  const ffprobe = executable('ffprobe');
+  const ffmpeg = resolveMediaTool('ffmpeg');
+  const ffprobe = resolveMediaTool('ffprobe');
   const pending = new Map();
   const queues = { thumbnail: Promise.resolve(), preview: Promise.resolve() };
 
