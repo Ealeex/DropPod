@@ -803,24 +803,30 @@ async function openArchivePreview(item, preview) {
 }
 
 async function openModelPreview(item, preview) {
-  previewMessage('Loading 3D model…');
   const url = `/api/drive/files/${encodeURIComponent(item.id)}/preview`;
+  const isBlend = /\.blend$/i.test(item.name);
   const isFbx = /\.fbx$/i.test(item.name);
+  const controller = new AbortController();
+  preview.dispose = () => controller.abort();
+  previewMessage(isBlend ? 'Preparing Blender preview…' : 'Loading 3D model…');
   try {
-    const response = await fetch(url);
+    const response = await fetch(url, { signal: controller.signal });
     if (!response.ok) {
       if (await handlePreviewAuth(response)) return;
-      throw new Error('Preview unavailable.');
+      const error = await response.json().catch(() => ({}));
+      if (state.preview === preview) previewMessage(error.error || 'Preview unavailable.');
+      return;
     }
-    const data = isFbx ? await response.arrayBuffer() : await response.text();
+    const data = isBlend || isFbx ? await response.arrayBuffer() : await response.text();
     if (state.preview !== preview) return;
-    const { createModelPreview, loadObjMaterials } = await import('./model-viewer.mjs');
+    const { createBlendPreview, createModelPreview, loadObjMaterials } = await import('./model-viewer.mjs');
     if (state.preview !== preview) return;
     const files = state.folder?.items?.filter((sibling) => sibling.kind === 'file') || [];
     const materials = /\.obj$/i.test(item.name) ? await loadObjMaterials(data, files) : '';
     if (state.preview !== preview) return;
     const model = isFbx ? { buffer: data } : { text: data };
-    const viewer = createModelPreview({ ...model, name: item.name, files, materials });
+    const viewer = isBlend ? await createBlendPreview(data, item.name)
+      : createModelPreview({ ...model, name: item.name, files, materials });
     if (state.preview !== preview) {
       viewer.dispose();
       return;
@@ -829,6 +835,7 @@ async function openModelPreview(item, preview) {
     previewBody.classList.add('model-mode');
     previewBody.replaceChildren(viewer.element);
   } catch (error) {
+    if (controller.signal.aborted) return;
     console.error(error);
     if (state.preview === preview) previewMessage('Preview unavailable. The model could not be rendered.');
   }
@@ -1927,7 +1934,7 @@ document.addEventListener('keydown', (event) => {
     closeContextMenu({ restoreFocus: true });
     return;
   }
-  if (event.key === 'Escape' && state.preview && !dialog.open) closePreview({ restoreFocus: true });
+  if (event.key === 'Escape' && state.preview && !dialog.open && !document.pointerLockElement) closePreview({ restoreFocus: true });
 });
 document.addEventListener('pointerdown', (event) => {
   if (!contextMenu.contains(event.target)) closeContextMenu();

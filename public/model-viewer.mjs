@@ -1,9 +1,11 @@
 import * as THREE from 'three';
 import { ColladaLoader } from 'three/addons/loaders/ColladaLoader.js';
 import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
 import { MTLLoader } from 'three/addons/loaders/MTLLoader.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { createFlyControls } from './fly-controls.mjs';
 
 const blankTexture = '/blank.png';
 
@@ -49,11 +51,47 @@ export async function loadObjMaterials(text, files) {
   return materials.join('\n');
 }
 
-export function createModelPreview({ text, buffer, name, files = [], materials = '' }) {
+function disposeModel(root) {
+  const resources = new Set();
+  const bitmaps = new Set();
+  root.traverse((object) => {
+    if (object.geometry) resources.add(object.geometry);
+    const materials = Array.isArray(object.material) ? object.material : [object.material];
+    for (const material of materials) {
+      if (!material) continue;
+      resources.add(material);
+      for (const value of Object.values(material)) {
+        if (!value?.isTexture) continue;
+        resources.add(value);
+        const image = value.source?.data;
+        if (typeof ImageBitmap !== 'undefined' && image instanceof ImageBitmap) bitmaps.add(image);
+      }
+    }
+  });
+  for (const resource of resources) resource.dispose();
+  for (const bitmap of bitmaps) bitmap.close();
+}
+
+export async function createBlendPreview(buffer, name) {
+  const manager = new THREE.LoadingManager();
+  manager.setURLModifier((url) => {
+    if (url.startsWith(`blob:${location.origin}/`)) return url;
+    throw new Error('The Blender preview references an external resource.');
+  });
+  const { scene } = await new GLTFLoader(manager).parseAsync(buffer, '');
+  try {
+    return createModelPreview({ name, model: scene });
+  } catch (error) {
+    disposeModel(scene);
+    throw error;
+  }
+}
+
+export function createModelPreview({ text, buffer, name, files = [], materials = '', model }) {
   const container = document.createElement('div');
   container.className = 'model-viewer';
-  container.setAttribute('role', 'img');
-  container.setAttribute('aria-label', `${name} 3D preview. Drag to rotate and scroll to zoom.`);
+  container.setAttribute('role', 'group');
+  container.setAttribute('aria-label', `${name} 3D preview`);
 
   const canvasHost = document.createElement('div');
   canvasHost.className = 'model-canvas';
@@ -67,7 +105,7 @@ export function createModelPreview({ text, buffer, name, files = [], materials =
 
   const isObj = /\.obj$/i.test(name);
   const isFbx = /\.fbx$/i.test(name);
-  const missing = new Set(isObj || isFbx ? [] : textureNames(text).filter((reference) => !textureUrls.has(reference)));
+  const missing = new Set(model || isObj || isFbx ? [] : textureNames(text).filter((reference) => !textureUrls.has(reference)));
   const embeddedUrls = new Set();
   function releaseEmbeddedTextures() {
     for (const url of embeddedUrls) URL.revokeObjectURL(url);
@@ -95,7 +133,9 @@ export function createModelPreview({ text, buffer, name, files = [], materials =
   });
 
   const subject = new THREE.Group();
-  if (isFbx) {
+  if (model) {
+    subject.add(model);
+  } else if (isFbx) {
     try {
       subject.add(new FBXLoader(manager).parse(buffer, ''));
     } catch (error) {
@@ -136,12 +176,16 @@ export function createModelPreview({ text, buffer, name, files = [], materials =
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
   renderer.toneMappingExposure = 1.05;
-  canvasHost.append(renderer.domElement);
+  const canvas = renderer.domElement;
+  canvas.tabIndex = 0;
+  canvas.setAttribute('aria-label', '3D viewport');
+  canvasHost.append(canvas);
 
   const scene = new THREE.Scene();
   scene.add(subject);
   const camera = new THREE.PerspectiveCamera(42, 1, 0.01, 1000);
-  const controls = new OrbitControls(camera, renderer.domElement);
+  const controls = new OrbitControls(camera, canvas);
+  const fly = createFlyControls(camera, canvas);
   controls.enableDamping = true;
   controls.dampingFactor = 0.08;
   controls.enablePan = false;
@@ -190,9 +234,47 @@ export function createModelPreview({ text, buffer, name, files = [], materials =
   controls.maxDistance = radius * 12;
   controls.update();
 
-  renderer.setAnimationLoop(() => {
+  const toolbar = document.createElement('div');
+  toolbar.className = 'model-controls';
+  toolbar.setAttribute('role', 'group');
+  toolbar.setAttribute('aria-label', 'Camera controls');
+  toolbar.innerHTML = `
+    <button class="text-button" type="button" aria-pressed="true">Orbit</button>
+    <button class="text-button" type="button" aria-pressed="false">Fly</button>
+    <label hidden>Speed <input type="range" min="0.1" max="4" step="0.1" value="1"></label>`;
+  const [orbitButton, flyButton] = toolbar.querySelectorAll('button');
+  const speed = toolbar.querySelector('input');
+  const speedLabel = toolbar.querySelector('label');
+  container.append(toolbar);
+  const orbitPosition = new THREE.Vector3();
+  const orbitNear = camera.near;
+  let flying = false;
+  function setFlyMode(enabled) {
+    if (flying === enabled) return;
+    flying = enabled;
+    if (enabled) orbitPosition.copy(camera.position);
+    else camera.position.copy(orbitPosition);
+    camera.near = enabled ? Math.max(radius / 10000, 0.00001) : orbitNear;
+    camera.updateProjectionMatrix();
+    controls.enabled = !enabled;
+    fly.setEnabled(enabled);
+    orbitButton.setAttribute('aria-pressed', String(!enabled));
+    flyButton.setAttribute('aria-pressed', String(enabled));
+    speedLabel.hidden = !enabled;
+    hint.textContent = enabled
+      ? 'WASD to move · R/F up and down · Click or drag to look'
+      : 'Drag to rotate · Scroll to zoom';
+  }
+  orbitButton.addEventListener('click', () => setFlyMode(false));
+  flyButton.addEventListener('click', () => setFlyMode(true));
+
+  let lastFrame = 0;
+  renderer.setAnimationLoop((time) => {
     if (disposed) return;
-    controls.update();
+    const delta = lastFrame ? Math.min((time - lastFrame) / 1000, 0.05) : 0;
+    lastFrame = time;
+    if (flying) fly.update(delta * radius * 0.6 * speed.valueAsNumber);
+    else controls.update();
     renderer.render(scene, camera);
   });
   resize();
@@ -205,18 +287,9 @@ export function createModelPreview({ text, buffer, name, files = [], materials =
       renderer.setAnimationLoop(null);
       releaseEmbeddedTextures();
       observer.disconnect();
+      fly.dispose();
       controls.dispose();
-      scene.traverse((object) => {
-        object.geometry?.dispose();
-        const materials = Array.isArray(object.material) ? object.material : [object.material];
-        for (const material of materials) {
-          if (!material) continue;
-          for (const value of Object.values(material)) {
-            if (value?.isTexture) value.dispose();
-          }
-          material.dispose();
-        }
-      });
+      disposeModel(scene);
       renderer.dispose();
     },
   };

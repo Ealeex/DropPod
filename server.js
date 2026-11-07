@@ -37,7 +37,7 @@ if (authMode === 'passphrase' && !passphrase) {
 }
 
 const contentSecurityPolicy = (() => {
-  const base = "default-src 'self'; img-src 'self' blob: data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'";
+  const base = "default-src 'self'; connect-src 'self' blob:; img-src 'self' blob: data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'";
   try {
     const html = readFileSync(driveHtml, 'utf8').replace(/\r\n?/g, '\n');
     const importMap = html.match(/<script type="importmap">([\s\S]*?)<\/script>/)?.[1];

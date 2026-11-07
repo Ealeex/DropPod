@@ -319,6 +319,22 @@ tbody tr.is-drop-target { background: var(--accent-soft); outline: 1px solid var
 }
 .model-canvas { position: absolute; inset: 0; }
 .model-canvas canvas { display: block; width: 100%; height: 100%; }
+.model-controls {
+  position: absolute;
+  z-index: 1;
+  inset: 10px auto auto 10px;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  max-width: calc(100% - 20px);
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: var(--surface);
+}
+.model-controls button[aria-pressed="true"] { color: var(--accent); }
+.model-controls label { display: flex; align-items: center; gap: 4px; font-size: .76rem; }
+.model-controls input { width: 70px; accent-color: var(--accent); }
 .model-hint, .model-warning {
   position: absolute;
   z-index: 1;
@@ -331,7 +347,7 @@ tbody tr.is-drop-target { background: var(--accent-soft); outline: 1px solid var
   pointer-events: none;
 }
 .model-hint { inset: auto 10px 10px auto; }
-.model-warning { inset: 10px 10px auto 10px; background: rgb(78 43 18 / 90%); text-align: center; }
+.model-warning { inset: 58px 10px auto 10px; background: rgb(78 43 18 / 90%); text-align: center; }
 .archive-view { display: grid; gap: 10px; }
 .archive-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; min-height: 32px; }
 .archive-toolbar .text-button { padding-inline: 2px; }

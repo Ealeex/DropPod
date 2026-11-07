@@ -8,6 +8,7 @@ const { isIP } = require('node:net');
 const path = require('node:path');
 const { open, unlink } = require('node:fs/promises');
 const { createMediaPreviews } = require('./media-preview');
+const { createBlendPreviews } = require('./blend-preview');
 const { createDownloads } = require('./downloads');
 const { resolveSevenZip } = require('./tool-paths');
 
@@ -28,7 +29,7 @@ const previewFormats = new Map(Object.entries({
   '.txt': 'text/plain', '.md': 'text/plain', '.csv': 'text/plain', '.tsv': 'text/plain',
   '.json': 'text/plain', '.log': 'text/plain', '.gltf': 'text/plain',
   '.dae': 'model/vnd.collada+xml', '.obj': 'model/obj', '.mtl': 'text/plain', '.pdf': 'application/pdf',
-  '.fbx': 'model/fbx',
+  '.fbx': 'model/fbx', '.blend': 'model/gltf-binary',
 }));
 const codeLanguages = new Map(Object.entries({
   '.js': 'javascript', '.mjs': 'javascript', '.cjs': 'javascript', '.jsx': 'javascript',
@@ -312,6 +313,7 @@ function createDriveRouter({ data, uploads, upload, removeBlob, authMode = 'acco
   const router = express.Router();
   const db = openDrive(data);
   const mediaPreviews = createMediaPreviews(data, uploads);
+  const blendPreviews = createBlendPreviews(data, uploads);
   const getItem = db.prepare('SELECT * FROM drive_items WHERE id = ?');
   const findChildFolder = db.prepare("SELECT id FROM drive_items WHERE parent_id = ? AND name_key = ? AND kind = 'folder'");
   const getCategories = db.prepare(`
@@ -406,6 +408,7 @@ function createDriveRouter({ data, uploads, upload, removeBlob, authMode = 'acco
         for (const { id } of pendingCleanup.all()) {
           try {
             await mediaPreviews.remove(id);
+            await blendPreviews.remove(id);
             await unlink(path.join(uploads, id)).catch((error) => {
               if (error.code !== 'ENOENT') throw error;
             });
@@ -1012,6 +1015,21 @@ function createDriveRouter({ data, uploads, upload, removeBlob, authMode = 'acco
     const file = getItem.get(req.params.id);
     if (file?.kind !== 'file') return res.status(404).json({ error: 'File not found.' });
     const { kind, format } = await filePreview(file);
+    if (format === 'model/gltf-binary') {
+      try {
+        const generated = await blendPreviews.get(file.id);
+        if (res.destroyed) return;
+        if (!getItem.get(file.id)) return res.sendStatus(404);
+        res.set('Content-Security-Policy', "default-src 'none'; sandbox");
+        res.type(format);
+        return res.sendFile(path.basename(generated), { root: path.dirname(generated), cacheControl: false });
+      } catch (error) {
+        if (res.destroyed) return;
+        if (error.status) return res.status(error.status).json({ error: error.message });
+        if (error.code === 'ENOENT') return res.status(404).json({ error: 'File not found.' });
+        throw error;
+      }
+    }
     if ((!format || req.query.compatible === '1') && compatibleMediaTypes.has(kind)) {
       return sendMediaPreview(res, file, kind, kind, compatibleMediaTypes.get(kind));
     }
