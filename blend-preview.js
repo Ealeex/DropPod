@@ -80,7 +80,9 @@ async function convert(runner, source, destination) {
       if (!failure && code !== 0) {
         if (code === 124 || runner.timedOut?.(code)) failure = previewError(504, 'Blender preview conversion timed out.');
         else if (code === 125 || runner.sandboxError?.test(diagnostic)) failure = previewError(503, runner.setup);
-        else failure = previewError(422, 'Blender could not export this file for preview.');
+        else if (/\b(?:_ArrayMemoryError|MemoryError):/.test(diagnostic)) {
+          failure = previewError(422, 'This scene uses more memory than the Blender preview can handle.');
+        } else failure = previewError(422, 'Blender could not export this file for preview.');
       }
       resolve();
     });
@@ -104,7 +106,7 @@ async function convert(runner, source, destination) {
       pipeline(child.stdout, limitOutput, createWriteStream(destination, { flags: 'wx' })).catch(abort),
     ]);
     if (failure) {
-      if (diagnostic && failure.status === 503) console.error('[FireSend] Blender preview:', diagnostic.trim());
+      if (diagnostic && [422, 503].includes(failure.status)) console.error('[FireSend] Blender preview:', diagnostic.trim());
       throw failure;
     }
     const file = await open(destination, 'r');

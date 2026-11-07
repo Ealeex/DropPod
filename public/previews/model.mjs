@@ -33,7 +33,7 @@ export function modelAssets(files, { resolve, onLoad } = {}) {
   return { manager, missing, textures };
 }
 
-export async function renderModel(context, parse, { loading = 'Loading 3D model…', useServerError = false } = {}) {
+export async function renderModel(context, parse, { loading = 'Loading 3D model…', useServerError = false, neutralLighting = false } = {}) {
   const { host, item, signal } = context;
   const errorMessage = 'Preview unavailable. The model could not be rendered.';
   showMessage(host, loading);
@@ -48,7 +48,7 @@ export async function renderModel(context, parse, { loading = 'Loading 3D model�
     }
     const subject = new THREE.Group();
     subject.add(model.subject);
-    const viewer = createViewer(subject, item.name, model.missing || new Set());
+    const viewer = createViewer(subject, item.name, model.missing || new Set(), neutralLighting);
     host.classList.add('model-mode');
     host.replaceChildren(viewer.element);
     return () => {
@@ -81,7 +81,7 @@ function disposeModel(subject) {
   });
 }
 
-function createViewer(subject, name, missing) {
+function createViewer(subject, name, missing, neutralLighting) {
   const container = document.createElement('div');
   container.className = 'model-viewer';
   container.setAttribute('role', 'group');
@@ -131,14 +131,20 @@ function createViewer(subject, name, missing) {
   controls.autoRotate = !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   controls.autoRotateSpeed = 0.9;
 
-  scene.add(new THREE.HemisphereLight(0xffffff, 0x3c4050, 2.1));
-  const key = new THREE.DirectionalLight(0xffffff, 2.8);
+  if (neutralLighting) {
+    // Blender's scene lights were authored for a different exposure and rendering pipeline.
+    subject.traverse((object) => {
+      if (object.isLight) object.intensity = 0;
+    });
+  }
+  scene.add(new THREE.HemisphereLight(0xffffff, neutralLighting ? 0x404040 : 0x3c4050, neutralLighting ? 0.8 : 2.1));
+  const key = new THREE.DirectionalLight(0xffffff, neutralLighting ? 1.6 : 2.8);
   key.position.set(4, 6, 5);
   scene.add(key);
-  const fill = new THREE.DirectionalLight(0x9db8ff, 1.1);
+  const fill = new THREE.DirectionalLight(neutralLighting ? 0xffffff : 0x9db8ff, neutralLighting ? 0.55 : 1.1);
   fill.position.set(-5, 2, -2);
   scene.add(fill);
-  const rim = new THREE.DirectionalLight(0xffd8aa, 1.4);
+  const rim = new THREE.DirectionalLight(neutralLighting ? 0xffffff : 0xffd8aa, neutralLighting ? 0.55 : 1.4);
   rim.position.set(-2, 4, -6);
   scene.add(rim);
 

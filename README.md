@@ -68,7 +68,7 @@ docker build --platform linux/amd64 -t firesend-blender-preview ./tools/blender-
 
 Set `BLENDER_PREVIEW_IMAGE=firesend-blender-preview` in `.env` and restart FireSend. Set `DOCKER_PATH` if Docker is outside the server’s PATH. ARM hosts need Docker’s AMD64 emulation for this image.
 
-FireSend converts the active scene to GLB on the first preview and caches it for later views. Pack textures into the Blender file before uploading. The 3D viewer opens in Orbit mode. Switch to **Fly** to move with WASD, move vertically with R/F, and look around by clicking or dragging. The speed slider adjusts movement for the current scene. Both runners receive the upload through a pipe, disable automatic Blender scripts, and limit conversion to 60 seconds and 128 MiB each for the upload and resulting GLB.
+FireSend converts the active scene to GLB on the first preview and caches it for later views. Pack textures into the Blender file before uploading. The converter scales oversized packed images to a maximum of 2048 pixels on their longest edge in the preview. Blender previews use neutral lighting for inspection. Procedural materials can look different from the Blender render. The 3D viewer opens in Orbit mode. Switch to **Fly** to move with WASD, move vertically with R/F, and look around by clicking or dragging. The speed slider adjusts movement for the current scene. Both runners receive the upload through a pipe, disable automatic Blender scripts, and limit conversion to 60 seconds and 128 MiB each for the upload and resulting GLB.
 
 ## Configuration
 

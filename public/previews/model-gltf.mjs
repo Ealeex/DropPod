@@ -5,7 +5,7 @@ export function render(context) {
   return renderGltf(context, { binary: /\.glb$/i.test(context.item.name) });
 }
 
-export function renderGltf(context, { binary, loading, useServerError } = {}) {
+export function renderGltf(context, { binary, loading, useServerError, neutralLighting } = {}) {
   const { files, signal } = context;
   return renderModel(context, async (response) => {
     const data = binary ? await response.arrayBuffer() : await response.text();
@@ -33,5 +33,5 @@ export function renderGltf(context, { binary, loading, useServerError } = {}) {
     });
     const model = await loader.parseAsync(data, '');
     return { subject: model.scene, missing };
-  }, { loading, useServerError });
+  }, { loading, useServerError, neutralLighting });
 }
