@@ -4,12 +4,26 @@ const { randomUUID } = require('node:crypto');
 const { mkdirSync } = require('node:fs');
 const { unlink } = require('node:fs/promises');
 const path = require('node:path');
+const { loadConfig } = require('./config-loader');
 const { createDriveRouter } = require('./drive');
 
 const app = express();
-const port = 3001;
+const port = Number(process.env.PORT) || 3001;
 const data = path.resolve(process.env.FIRESEND_DATA_DIR || path.join(__dirname, '.data'));
 const uploads = path.join(data, 'uploads');
+
+try {
+  process.loadEnvFile(path.join(__dirname, '.env'));
+} catch (error) {
+  if (error.code !== 'ENOENT') console.error('Could not read .env:', error.message);
+}
+
+const { defaultTheme, authMode } = loadConfig();
+const passphrase = process.env.PASSPHRASE || '';
+if (authMode === 'passphrase' && !passphrase) {
+  console.error('PASSPHRASE must be set in .env (or the environment) when auth-mode is "passphrase".');
+  process.exit(1);
+}
 
 mkdirSync(uploads, { recursive: true });
 
@@ -41,9 +55,25 @@ app.use('/api', (req, res, next) => {
   next();
 });
 app.use(express.json({ limit: '2kb' }));
-const drive = createDriveRouter({ data, uploads, upload, removeBlob });
+const drive = createDriveRouter({ data, uploads, upload, removeBlob, authMode, passphrase });
 app.use('/api/drive', drive.router);
 
+app.get('/config.js', (req, res) => {
+  res.type('application/javascript');
+  res.set('Cache-Control', 'no-store');
+  res.send(`(function () {
+  var config = ${JSON.stringify({ defaultTheme, authMode })};
+  window.FIRESEND_CONFIG = config;
+  var theme = config.defaultTheme;
+  try {
+    var saved = localStorage.getItem('firesend:drive-theme');
+    if (saved === 'graphite' || saved === 'vista') theme = saved;
+  } catch (error) {}
+  document.documentElement.dataset.theme = theme;
+  var meta = document.querySelector('meta[name="theme-color"]');
+  if (meta) meta.content = theme === 'graphite' ? '#101112' : '#0b2633';
+})();`);
+});
 app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'public', 'drive.html')));
 app.use(express.static(path.join(__dirname, 'public')));
 app.use('/api', (req, res) => res.status(404).json({ error: 'Not found.' }));

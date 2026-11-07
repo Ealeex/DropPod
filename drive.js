@@ -8,8 +8,11 @@ const { open, unlink } = require('node:fs/promises');
 
 const deriveKey = promisify(scrypt);
 const sessionCookie = 'firesend_session';
+const passphraseCookie = 'firesend_passphrase';
+const ipCookie = 'firesend_ip';
 const sessionDuration = 7 * 24 * 60 * 60 * 1000;
 const usernamePattern = /^[a-zA-Z0-9][a-zA-Z0-9_.-]{2,31}$/;
+const friendlyNamePattern = /^[^\x00-\x1f\x7f/\\]{1,40}$/;
 const authWindow = 15 * 60 * 1000;
 
 const previewFormats = new Map(Object.entries({
@@ -47,6 +50,12 @@ function openDrive(data) {
     );
     CREATE INDEX IF NOT EXISTS drive_sessions_account ON drive_sessions(account_id);
     CREATE INDEX IF NOT EXISTS drive_sessions_expiry ON drive_sessions(expires_at);
+    CREATE TABLE IF NOT EXISTS drive_ip_users (
+      ip TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      passphrase_hash TEXT NOT NULL,
+      created_at INTEGER NOT NULL
+    );
     CREATE TABLE IF NOT EXISTS drive_items (
       id TEXT PRIMARY KEY,
       parent_id TEXT REFERENCES drive_items(id),
@@ -72,10 +81,14 @@ function openDrive(data) {
 
 const hashToken = (token) => createHash('sha256').update(token).digest('hex');
 
-function tokenFrom(req) {
+function cookieFrom(req, name) {
   const cookie = (req.get('cookie') || '').split(';').map((entry) => entry.trim())
-    .find((entry) => entry.startsWith(sessionCookie + '='));
-  const token = cookie?.slice(sessionCookie.length + 1);
+    .find((entry) => entry.startsWith(name + '='));
+  return cookie?.slice(name.length + 1) || null;
+}
+
+function tokenFrom(req) {
+  const token = cookieFrom(req, sessionCookie);
   return /^[a-f0-9]{64}$/.test(token || '') ? token : null;
 }
 
@@ -94,7 +107,12 @@ function itemName(input) {
   return name && name.length <= 150 && name !== '.' && name !== '..' && !/[\x00-\x1f\x7f/\\]/.test(name) ? name : null;
 }
 
-function createDriveRouter({ data, uploads, upload, removeBlob }) {
+function createDriveRouter({ data, uploads, upload, removeBlob, authMode = 'account', passphrase = '' }) {
+  const accountsEnabled = authMode === 'account';
+  const passphraseRequired = authMode === 'passphrase';
+  const ipMode = authMode === 'ip';
+  const passphraseSessions = new Map();
+  const ipSessions = new Map();
   const router = express.Router();
   const db = openDrive(data);
   const getItem = db.prepare('SELECT * FROM drive_items WHERE id = ?');
@@ -104,6 +122,7 @@ function createDriveRouter({ data, uploads, upload, removeBlob }) {
     ORDER BY c.position, c.id
   `);
   const getAccount = db.prepare('SELECT * FROM drive_accounts WHERE username = ?');
+  const getIpUser = db.prepare('SELECT * FROM drive_ip_users WHERE ip = ?');
   const removeSession = db.prepare('DELETE FROM drive_sessions WHERE token_hash = ?');
   const removeExpired = db.prepare('DELETE FROM drive_sessions WHERE expires_at <= ?');
   const insertItem = db.prepare(`
@@ -172,6 +191,40 @@ function createDriveRouter({ data, uploads, upload, removeBlob }) {
     res.cookie(sessionCookie, token, { ...cookieOptions(req), maxAge: sessionDuration });
   }
 
+  function clientIp(req) {
+    const address = req.ip || req.socket?.remoteAddress || 'unknown';
+    return address.startsWith('::ffff:') ? address.slice(7) : address;
+  }
+
+  function hasPassphrase(req) {
+    if (!passphraseRequired) return true;
+    const token = cookieFrom(req, passphraseCookie);
+    return /^[a-f0-9]{64}$/.test(token || '') && passphraseSessions.get(token) > Date.now();
+  }
+
+  function hasIpSession(req) {
+    if (!ipMode) return true;
+    const token = cookieFrom(req, ipCookie);
+    const session = token ? ipSessions.get(token) : null;
+    return Boolean(session && session.expiresAt > Date.now() && session.ip === clientIp(req));
+  }
+
+  function startIpSession(req, res) {
+    const token = randomBytes(32).toString('hex');
+    ipSessions.set(token, { ip: clientIp(req), expiresAt: Date.now() + sessionDuration });
+    res.cookie(ipCookie, token, { ...cookieOptions(req), maxAge: sessionDuration });
+  }
+
+  setInterval(() => {
+    const now = Date.now();
+    for (const [token, expiresAt] of passphraseSessions) {
+      if (expiresAt <= now) passphraseSessions.delete(token);
+    }
+    for (const [token, session] of ipSessions) {
+      if (session.expiresAt <= now) ipSessions.delete(token);
+    }
+  }, 60_000).unref();
+
   router.use((req, res, next) => {
     const origin = req.get('origin');
     if (!['GET', 'HEAD'].includes(req.method) && origin && origin !== `${req.protocol}://${req.get('host')}`) {
@@ -182,7 +235,7 @@ function createDriveRouter({ data, uploads, upload, removeBlob }) {
 
   function readSession(req, res, next) {
     req.driveToken = tokenFrom(req);
-    if (req.driveToken) {
+    if (accountsEnabled && req.driveToken) {
       req.driveAccount = db.prepare(`
         SELECT a.id, a.username, a.role, s.expires_at FROM drive_sessions s
         JOIN drive_accounts a ON a.id = s.account_id
@@ -192,8 +245,21 @@ function createDriveRouter({ data, uploads, upload, removeBlob }) {
     next();
   }
 
-  function requireMember(req, res, next) {
-    if (!req.driveAccount) return res.status(401).json({ error: 'Sign in to make this change.' });
+  function requireAccess(req, res, next) {
+    if (passphraseRequired && !hasPassphrase(req)) {
+      return res.status(401).json({ error: 'Enter the passphrase to access the drive.', authMode, passphraseRequired: true });
+    }
+    if (ipMode && !hasIpSession(req)) {
+      return res.status(401).json({ error: 'Register or enter your passphrase to access the drive.', authMode, ipRequired: true });
+    }
+    if (accountsEnabled && !req.driveAccount) {
+      return res.status(401).json({ error: 'Sign in to access the drive.', authMode, signInRequired: true });
+    }
+    next();
+  }
+
+  function requireAccounts(req, res, next) {
+    if (!accountsEnabled) return res.status(404).json({ error: 'Accounts are disabled.' });
     next();
   }
 
@@ -229,14 +295,85 @@ function createDriveRouter({ data, uploads, upload, removeBlob }) {
   }
 
   router.get('/session', (req, res) => {
-    if (req.driveAccount) {
+    if (accountsEnabled && req.driveAccount) {
       res.clearCookie(sessionCookie, { ...cookieOptions(req), path: '/api/drive' });
       res.cookie(sessionCookie, req.driveToken, { ...cookieOptions(req), expires: new Date(req.driveAccount.expires_at) });
     }
-    res.json({ account: req.driveAccount ? publicAccount(req.driveAccount) : null });
+    const ipUser = ipMode ? getIpUser.get(clientIp(req)) : null;
+    res.json({
+      authMode,
+      account: accountsEnabled && req.driveAccount ? publicAccount(req.driveAccount) : null,
+      passphraseRequired,
+      passphraseUnlocked: passphraseRequired ? hasPassphrase(req) : true,
+      ipRegistered: Boolean(ipUser),
+      ipName: ipUser?.name || null,
+      ipUnlocked: ipMode ? hasIpSession(req) : true,
+    });
   });
 
-  router.post('/register', limitAuth, async (req, res) => {
+  router.post('/passphrase', limitAuth, (req, res) => {
+    if (!passphraseRequired) return res.status(404).json({ error: 'Passphrase access is disabled.' });
+    const provided = typeof req.body?.passphrase === 'string' ? req.body.passphrase : '';
+    const expected = createHash('sha256').update(passphrase).digest();
+    const actual = createHash('sha256').update(provided).digest();
+    if (!timingSafeEqual(expected, actual)) {
+      return res.status(401).json({ error: 'That passphrase is incorrect.' });
+    }
+    const token = randomBytes(32).toString('hex');
+    passphraseSessions.set(token, Date.now() + sessionDuration);
+    res.cookie(passphraseCookie, token, { ...cookieOptions(req), maxAge: sessionDuration });
+    res.json({ unlocked: true });
+  });
+
+  router.post('/ip/register', limitAuth, async (req, res) => {
+    if (!ipMode) return res.status(404).json({ error: 'Network registration is disabled.' });
+    const ip = clientIp(req);
+    if (getIpUser.get(ip)) {
+      return res.status(409).json({ error: 'This network is already registered. Enter its passphrase.', needsLogin: true });
+    }
+    const name = typeof req.body?.name === 'string' ? req.body.name.trim().normalize('NFC') : '';
+    const provided = req.body?.passphrase;
+    if (!friendlyNamePattern.test(name) || typeof provided !== 'string' || provided.length < 6 || provided.length > 128) {
+      return res.status(400).json({ error: 'Choose a name of up to 40 characters and a passphrase of at least 6 characters.' });
+    }
+    const passphraseHash = await hashPassword(provided);
+    const inserted = db.prepare(`
+      INSERT INTO drive_ip_users (ip, name, passphrase_hash, created_at)
+      VALUES (?, ?, ?, ?) ON CONFLICT (ip) DO NOTHING
+    `).run(ip, name, passphraseHash, Date.now());
+    if (!inserted.changes) {
+      return res.status(409).json({ error: 'This network is already registered. Enter its passphrase.', needsLogin: true });
+    }
+    startIpSession(req, res);
+    res.status(201).json({ ipName: name });
+  });
+
+  router.post('/ip/login', limitAuth, async (req, res) => {
+    if (!ipMode) return res.status(404).json({ error: 'Network sign-in is disabled.' });
+    const user = getIpUser.get(clientIp(req));
+    if (!user) return res.status(404).json({ error: 'This network has not been registered yet.', needsRegistration: true });
+    const provided = typeof req.body?.passphrase === 'string' ? req.body.passphrase : '';
+    const actual = await hashPassword(provided, user.passphrase_hash.split(':', 1)[0]);
+    if (!timingSafeEqual(Buffer.from(user.passphrase_hash), Buffer.from(actual))) {
+      return res.status(401).json({ error: 'That passphrase is incorrect.' });
+    }
+    startIpSession(req, res);
+    res.json({ ipName: user.name });
+  });
+
+  router.post('/logout', (req, res) => {
+    if (req.driveToken) removeSession.run(hashToken(req.driveToken));
+    const passphraseToken = cookieFrom(req, passphraseCookie);
+    if (passphraseToken) passphraseSessions.delete(passphraseToken);
+    const ipToken = cookieFrom(req, ipCookie);
+    if (ipToken) ipSessions.delete(ipToken);
+    res.clearCookie(sessionCookie, { ...cookieOptions(req), path: '/api/drive' });
+    res.clearCookie(passphraseCookie, cookieOptions(req));
+    res.clearCookie(ipCookie, cookieOptions(req));
+    res.clearCookie(sessionCookie, cookieOptions(req)).sendStatus(204);
+  });
+
+  router.post('/register', requireAccounts, limitAuth, async (req, res) => {
     const username = typeof req.body?.username === 'string' ? req.body.username.trim() : '';
     const password = req.body?.password;
     if (!usernamePattern.test(username) || typeof password !== 'string' || password.length < 10 || password.length > 128) {
@@ -258,7 +395,7 @@ function createDriveRouter({ data, uploads, upload, removeBlob }) {
     res.status(201).json({ account: publicAccount(account) });
   });
 
-  router.post('/login', limitAuth, async (req, res) => {
+  router.post('/login', requireAccounts, limitAuth, async (req, res) => {
     const username = typeof req.body?.username === 'string' ? req.body.username.trim() : '';
     const password = req.body?.password;
     if (!usernamePattern.test(username) || typeof password !== 'string' || password.length > 128) {
@@ -275,13 +412,7 @@ function createDriveRouter({ data, uploads, upload, removeBlob }) {
     res.json({ account: publicAccount(account) });
   });
 
-  router.post('/logout', (req, res) => {
-    if (req.driveToken) removeSession.run(hashToken(req.driveToken));
-    res.clearCookie(sessionCookie, { ...cookieOptions(req), path: '/api/drive' });
-    res.clearCookie(sessionCookie, cookieOptions(req)).sendStatus(204);
-  });
-
-  router.use(requireMember);
+  router.use(requireAccess);
 
   router.post('/categories', (req, res) => {
     const name = itemName(req.body?.name);
@@ -515,7 +646,7 @@ function createDriveRouter({ data, uploads, upload, removeBlob }) {
     res.status(400).json({ error: 'Administrator accounts are managed on the host.' });
   });
 
-  return { router, readSession, requireMember };
+  return { router, readSession };
 }
 
 module.exports = { createDriveRouter, openDrive };

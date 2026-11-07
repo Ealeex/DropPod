@@ -1,0 +1,11 @@
+{
+  // Theme used on first visit: "vista" or "graphite".
+  "default-theme": "vista",
+
+  // How people authenticate to the drive:
+  //   "account"    - username and password, with registration and an admin panel.
+  //   "passphrase" - one shared passphrase for everyone. Set PASSPHRASE in .env.
+  //   "ip"         - each network address registers a friendly name and passphrase.
+  //                  Later visits from the same address only ask for the passphrase.
+  "auth-mode": "account"
+}

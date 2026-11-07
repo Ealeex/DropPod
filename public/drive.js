@@ -3,7 +3,24 @@ const icon = (name) => `<svg aria-hidden="true"><use href="/icons.svg#${name}"><
 const rootId = 'root';
 const idPattern = /^(?:root|[a-f0-9-]{36})$/i;
 const dateFormat = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' });
-const state = { account: null, folder: null, version: 0, uploading: false, accountReady: false, loading: false, preview: null };
+const config = window.FIRESEND_CONFIG || {};
+const guestAccount = { id: 'guest', username: 'Guest', role: 'member', anonymous: true };
+function loadRenameSplit() {
+  try {
+    const saved = localStorage.getItem('firesend:rename-split');
+    if (saved === 'single') return false;
+    if (saved === 'split') return true;
+  } catch {
+    // Fall back to the default below.
+  }
+  return true;
+}
+const state = {
+  account: null, folder: null, version: 0, uploading: false, accountReady: false,
+  loading: false, preview: null, authMode: config.authMode || 'account',
+  passphraseRequired: false, passphraseUnlocked: false,
+  ipRegistered: false, ipName: null, renameSplit: loadRenameSplit(),
+};
 const dialog = $('#dialog');
 const dialogBody = $('#dialog-body');
 const dialogError = $('#dialog-error');
@@ -30,9 +47,14 @@ async function request(path, { method = 'GET', body } = {}) {
   if (response.status === 204) return;
   const data = await response.json();
   if (!response.ok) {
-    if (response.status === 401 && state.account) setAccount(null);
+    if (response.status === 401) {
+      if (data.passphraseRequired) showPassphraseScreen('Enter the passphrase to continue.');
+      else if (data.ipRequired) loadSession().catch(() => {});
+      else if (data.signInRequired || state.account) setAccount(null);
+    }
     const error = new Error(data.error || 'The request failed.');
     error.status = response.status;
+    error.data = data;
     throw error;
   }
   return data;
@@ -92,7 +114,7 @@ function renderAccount() {
   badge.className = 'account-name';
   badge.textContent = state.account.username;
   controls.replaceChildren(badge);
-  if (state.account.role === 'admin') {
+  if (state.authMode === 'account' && state.account.role === 'admin') {
     const button = makeButton('Admin panel', openAdmin);
     button.insertAdjacentHTML('afterbegin', icon('shield'));
     controls.append(button);
@@ -103,7 +125,7 @@ function renderAccount() {
   controls.append(makeButton('Sign out', async () => {
     try {
       await request('/logout', { method: 'POST' });
-      setAccount(null);
+      await loadSession();
       notice('Signed out.');
     } catch (error) {
       showError(pageError, error.message);
@@ -115,10 +137,10 @@ function setAccount(account) {
   const wasSignedIn = Boolean(state.account);
   state.account = account;
   state.accountReady = true;
-  $('#access-screen').hidden = Boolean(account);
-  $('#workspace').hidden = !account;
+  $('#access-screen').hidden = Boolean(state.account);
+  $('#workspace').hidden = !state.account;
   renderAccount();
-  if (!account) {
+  if (!state.account) {
     state.version++;
     state.loading = false;
     state.folder = null;
@@ -136,6 +158,140 @@ function setAccount(account) {
   showError($('#access-error'));
   if (!wasSignedIn) loadFolder(currentFolder());
   else renderFolder();
+}
+
+function showPassphraseScreen(message = '') {
+  state.passphraseRequired = true;
+  state.passphraseUnlocked = false;
+  state.account = null;
+  state.accountReady = false;
+  $('#passphrase-screen').hidden = false;
+  $('#ip-screen').hidden = true;
+  $('#access-screen').hidden = true;
+  $('#workspace').hidden = true;
+  $('#account-controls').replaceChildren();
+  closeContextMenu();
+  closePreview();
+  const input = $('#passphrase-input');
+  input.value = '';
+  showError($('#passphrase-error'), message);
+  input.focus();
+}
+
+function showIpScreen(message = '') {
+  state.account = null;
+  state.accountReady = false;
+  $('#ip-screen').hidden = false;
+  $('#passphrase-screen').hidden = true;
+  $('#access-screen').hidden = true;
+  $('#workspace').hidden = true;
+  $('#account-controls').replaceChildren();
+  closeContextMenu();
+  closePreview();
+  const registered = state.ipRegistered;
+  $('#ip-title').textContent = registered ? `Welcome back${state.ipName ? ', ' + state.ipName : ''}` : 'Set up this network';
+  $('#ip-copy').textContent = registered
+    ? 'Enter this network’s passphrase to open the shared drive.'
+    : 'Choose a friendly name and a passphrase for this network address.';
+  $('#ip-register-form').hidden = registered;
+  $('#ip-login-form').hidden = !registered;
+  $('#ip-register-form').reset();
+  $('#ip-login-form').reset();
+  showError($('#ip-error'), message);
+  (registered ? $('#ip-login-passphrase') : $('#ip-name-input')).focus();
+}
+
+async function loadSession() {
+  const session = await request('/session');
+  state.authMode = session.authMode || 'account';
+  state.passphraseRequired = session.passphraseRequired === true;
+  state.passphraseUnlocked = session.passphraseUnlocked !== false;
+  state.ipRegistered = session.ipRegistered === true;
+  state.ipName = session.ipName || null;
+  if (state.authMode === 'passphrase' && !state.passphraseUnlocked) {
+    showPassphraseScreen();
+    return;
+  }
+  if (state.authMode === 'ip' && !session.ipUnlocked) {
+    showIpScreen();
+    return;
+  }
+  $('#passphrase-screen').hidden = true;
+  $('#ip-screen').hidden = true;
+  const account = state.authMode === 'account'
+    ? session.account
+    : { ...guestAccount, username: state.authMode === 'ip' ? (state.ipName || 'Guest') : 'Shared drive' };
+  setAccount(account);
+}
+
+async function submitPassphrase(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const button = form.querySelector('button[type="submit"]');
+  const input = $('#passphrase-input');
+  showError($('#passphrase-error'));
+  button.disabled = true;
+  try {
+    await request('/passphrase', { method: 'POST', body: { passphrase: input.value } });
+    await loadSession();
+    notice('Drive unlocked.');
+  } catch (error) {
+    showError($('#passphrase-error'), error.message);
+    input.select();
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function submitIpRegister(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const button = form.querySelector('button[type="submit"]');
+  const nameInput = $('#ip-name-input');
+  const passphraseInput = $('#ip-register-passphrase');
+  showError($('#ip-error'));
+  button.disabled = true;
+  try {
+    await request('/ip/register', {
+      method: 'POST', body: { name: nameInput.value, passphrase: passphraseInput.value },
+    });
+    await loadSession();
+    notice('This network is registered.');
+  } catch (error) {
+    if (error.data?.needsLogin) {
+      state.ipRegistered = true;
+      showIpScreen(error.message);
+    } else {
+      showError($('#ip-error'), error.message);
+      (nameInput.value ? passphraseInput : nameInput).focus();
+    }
+  } finally {
+    if (button.isConnected) button.disabled = false;
+  }
+}
+
+async function submitIpLogin(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const button = form.querySelector('button[type="submit"]');
+  const passphraseInput = $('#ip-login-passphrase');
+  showError($('#ip-error'));
+  button.disabled = true;
+  try {
+    await request('/ip/login', { method: 'POST', body: { passphrase: passphraseInput.value } });
+    await loadSession();
+    notice('Drive unlocked.');
+  } catch (error) {
+    if (error.data?.needsRegistration) {
+      state.ipRegistered = false;
+      showIpScreen('This network is not registered yet. Set it up below.');
+    } else {
+      showError($('#ip-error'), error.message);
+      passphraseInput.select();
+    }
+  } finally {
+    if (button.isConnected) button.disabled = false;
+  }
 }
 
 function action(label, glyph, callback) {
@@ -198,7 +354,12 @@ async function openPreview(item, trigger, { focus = true } = {}) {
     try {
       const response = await fetch(url);
       if (!response.ok) {
-        if (response.status === 401) setAccount(null);
+        if (response.status === 401) {
+          const data = await response.json().catch(() => ({}));
+          if (data.passphraseRequired) showPassphraseScreen('Enter the passphrase to continue.');
+          else if (data.ipRequired) loadSession().catch(() => {});
+          else setAccount(null);
+        }
         throw new Error('Preview unavailable.');
       }
       const text = await response.text();
@@ -463,25 +624,50 @@ function accountDialog(mode, afterSignIn) {
   });
 }
 
+function splitName(name) {
+  const index = name.lastIndexOf('.');
+  if (index <= 0 || index === name.length - 1) return { base: name, ext: '' };
+  return { base: name.slice(0, index), ext: name.slice(index) };
+}
+
+function extensionValue(value) {
+  const ext = (value || '').trim().replace(/\s+/g, '');
+  return ext && !ext.startsWith('.') ? '.' + ext : ext;
+}
+
 function nameDialog(mode, item) {
   const folder = state.folder;
   if (!folder) return;
   if (!state.account) return accountDialog('login', () => nameDialog(mode, item));
   const renaming = mode === 'rename';
+  const split = renaming && item.kind === 'file' && state.renameSplit;
+  const parts = split ? splitName(item.name) : null;
   showDialog(renaming ? 'Rename item' : 'New folder', `
     <form class="dialog-form">
-      <label>${renaming ? 'Name' : 'Folder name'}<input name="name" maxlength="150" required autofocus></label>
+      ${split ? `<div class="name-split">
+        <label>File name<input name="base" maxlength="150" required autofocus></label>
+        <label>Extension<input name="ext" maxlength="20" placeholder=".txt"></label>
+      </div>` : `<label>${renaming ? 'Name' : 'Folder name'}<input name="name" maxlength="150" required autofocus></label>`}
       <div class="dialog-actions"><button type="button" class="button cancel-dialog">Cancel</button><button class="button primary" type="submit">${renaming ? 'Save name' : 'Create folder'}</button></div>
     </form>`);
-  if (renaming) {
+  if (split) {
+    const base = dialogBody.querySelector('input[name="base"]');
+    dialogBody.querySelector('input[name="ext"]').value = parts.ext;
+    base.value = parts.base;
+    base.focus();
+    base.select();
+  } else if (renaming) {
     const input = dialogBody.querySelector('input');
     input.value = item.name;
     input.select();
   }
   dialogBody.querySelector('.cancel-dialog').addEventListener('click', () => dialog.close());
   submitForm(async (fields, form) => {
+    const name = split
+      ? `${fields.get('base').trim()}${extensionValue(fields.get('ext'))}`
+      : fields.get('name');
     await request(renaming ? `/items/${item.id}` : `/folders/${folder.id}`, {
-      method: renaming ? 'PATCH' : 'POST', body: { name: fields.get('name') },
+      method: renaming ? 'PATCH' : 'POST', body: { name },
     });
     if (form.isConnected && dialog.open) dialog.close();
     notice(renaming ? 'Name updated.' : 'Folder created.');
@@ -797,6 +983,17 @@ function openSettings() {
         <span class="theme-swatch theme-swatch-graphite" aria-hidden="true"></span>
         <span>Graphite</span>
       </label>
+    </fieldset>
+    <fieldset class="theme-options">
+      <legend>Rename dialog</legend>
+      <label class="theme-option">
+        <input type="radio" name="rename-mode" value="split">
+        <span>File name and extension<small class="hint">Two boxes</small></span>
+      </label>
+      <label class="theme-option">
+        <input type="radio" name="rename-mode" value="single">
+        <span>Single name field<small class="hint">One box</small></span>
+      </label>
     </fieldset>`);
   const activeTheme = document.documentElement.dataset.theme;
   for (const input of dialogBody.querySelectorAll('input[name="drive-theme"]')) {
@@ -811,10 +1008,23 @@ function openSettings() {
       }
     });
   }
+  for (const input of dialogBody.querySelectorAll('input[name="rename-mode"]')) {
+    input.checked = input.value === (state.renameSplit ? 'split' : 'single');
+    input.addEventListener('change', () => {
+      if (!input.checked) return;
+      state.renameSplit = input.value === 'split';
+      try {
+        localStorage.setItem('firesend:rename-split', input.value);
+      } catch {
+        // The selection still applies to this page.
+      }
+    });
+  }
   dialogBody.querySelector('input:checked').focus();
 }
 
 function openAdmin() {
+  if (state.authMode !== 'account' || state.account?.role !== 'admin') return;
   showDialog('Admin panel', `
     <p id="admin-summary" class="dialog-copy">Loading accounts…</p>
     <ul id="admin-list" class="admin-list"></ul>`);
@@ -872,6 +1082,9 @@ function openAdmin() {
   refreshAdmin();
 }
 
+$('#passphrase-form').addEventListener('submit', submitPassphrase);
+$('#ip-register-form').addEventListener('submit', submitIpRegister);
+$('#ip-login-form').addEventListener('submit', submitIpLogin);
 $('#close-dialog').addEventListener('click', () => dialog.close());
 $('#close-preview').addEventListener('click', () => closePreview({ restoreFocus: true }));
 contextMenu.addEventListener('keydown', (event) => {
@@ -958,12 +1171,12 @@ window.addEventListener('pageshow', (event) => {
   if (event.persisted) location.reload();
 });
 try {
-  applyTheme(localStorage.getItem('firesend:drive-theme'));
+  applyTheme(localStorage.getItem('firesend:drive-theme') || config.defaultTheme);
 } catch {
-  applyTheme('vista');
+  applyTheme(config.defaultTheme);
 }
 
-request('/session').then(({ account }) => setAccount(account)).catch((error) => {
+loadSession().catch((error) => {
   setAccount(null);
   showError($('#access-error'), error.message);
 });

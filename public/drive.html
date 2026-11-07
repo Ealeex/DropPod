@@ -7,6 +7,7 @@
   <meta name="description" content="A shared drive for your group.">
   <title>FireSend · Shared drive</title>
   <link rel="icon" href="/mark.svg" type="image/svg+xml">
+  <script src="/config.js"></script>
   <link rel="stylesheet" href="/drive.css">
   <script src="/drive.js" defer></script>
 </head>
@@ -23,6 +24,33 @@
     <p>Sign in to access the shared drive.</p>
     <div id="access-actions" class="account-controls"></div>
     <p id="access-error" class="error" role="alert" hidden></p>
+  </main>
+  <main id="passphrase-screen" class="access-screen" hidden>
+    <div>
+      <h1>Locked drive</h1>
+      <p>Enter the passphrase to open the shared drive.</p>
+    </div>
+    <form id="passphrase-form" class="dialog-form">
+      <label>Passphrase<input id="passphrase-input" name="passphrase" type="password" autocomplete="current-password" required></label>
+      <button class="button primary" type="submit">Unlock drive</button>
+    </form>
+    <p id="passphrase-error" class="error" role="alert" hidden></p>
+  </main>
+  <main id="ip-screen" class="access-screen" hidden>
+    <div>
+      <h1 id="ip-title">Set up this network</h1>
+      <p id="ip-copy">Choose a friendly name and a passphrase for this network address.</p>
+    </div>
+    <form id="ip-register-form" class="dialog-form" hidden>
+      <label>Friendly name<input id="ip-name-input" name="name" maxlength="40" autocomplete="nickname" required></label>
+      <label>Passphrase<input id="ip-register-passphrase" name="passphrase" type="password" minlength="6" autocomplete="new-password" required></label>
+      <button class="button primary" type="submit">Register this network</button>
+    </form>
+    <form id="ip-login-form" class="dialog-form" hidden>
+      <label>Passphrase<input id="ip-login-passphrase" name="passphrase" type="password" autocomplete="current-password" required></label>
+      <button class="button primary" type="submit">Unlock drive</button>
+    </form>
+    <p id="ip-error" class="error" role="alert" hidden></p>
   </main>
   <main id="workspace" class="workspace" hidden>
     <aside class="sidebar" aria-label="Drive navigation">

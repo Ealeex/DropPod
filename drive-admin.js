@@ -1,8 +1,13 @@
 const path = require('node:path');
 const { openDrive } = require('./drive');
+const { loadConfig } = require('./config-loader');
 
+const { authMode } = loadConfig();
 const username = process.argv[2]?.trim();
-if (!username) {
+if (authMode !== 'account') {
+  console.error(`Administrator access is only available when auth-mode is "account" (current mode: "${authMode}").`);
+  process.exitCode = 1;
+} else if (!username) {
   console.error('Usage: npm run grant-admin -- username');
   process.exitCode = 1;
 } else {
