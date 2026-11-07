@@ -16,5 +16,3 @@ Open [FireSend](http://localhost:3001). For a second device on the same network,
 Rooms last 24 hours and accept files up to 500 MB each. Anyone who has a room code and can reach the server can upload and download. The creator can list their room publicly on this server. The app uses plain HTTP and is intended for a trusted local network.
 
 The server stores files and room metadata under `.data` by default. Set `FIRESEND_DATA_DIR` to use another directory. Expired rooms and their files are removed automatically while the server runs.
-
-The local recreation includes Quick Share, public room browsing, and a TV browser view. The Lifetime Room card links to the original service.

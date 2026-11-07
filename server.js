@@ -12,7 +12,7 @@ const app = express();
 const port = 3001;
 const data = path.resolve(process.env.FIRESEND_DATA_DIR || path.join(__dirname, '.data'));
 const uploads = path.join(data, 'uploads');
-const lifetime = 24 * 60 * 60 * 1000;
+const roomDuration = 24 * 60 * 60 * 1000;
 const maxFileSize = 500 * 1024 * 1024;
 const alphabet = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
 
@@ -84,7 +84,7 @@ app.use('/api', (req, res, next) => {
 app.use(express.json({ limit: '2kb' }));
 
 app.post('/api/rooms', (req, res) => {
-  const expiresAt = Date.now() + lifetime;
+  const expiresAt = Date.now() + roomDuration;
   const ownerKey = randomUUID();
   const insert = db.prepare('INSERT OR IGNORE INTO rooms (code, expiresAt, ownerKey) VALUES (?, ?, ?)');
   let code;
@@ -162,7 +162,7 @@ app.get('/api/rooms/:code/files/:id', findRoom, (req, res, next) => {
 });
 
 app.use(express.static(path.join(__dirname, 'public')));
-app.get(['/room/:code', '/public-rooms', '/guide', '/tv'], (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
+app.get(['/room/:code', '/public-rooms', '/guide'], (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 app.use('/api', (req, res) => res.status(404).json({ error: 'Not found.' }));
 
 app.use((error, req, res, next) => {

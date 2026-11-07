@@ -44,14 +44,6 @@ h2 { font-size: 1.5rem; }
 .cyan { background: linear-gradient(105deg, #0697b3, #3672dc); color: white; }
 .orange { background: linear-gradient(105deg, #ffa718, #ff7a26); color: #261306; }
 
-.tv-launch {
-  position: fixed; z-index: 1; top: 14px; right: 16px;
-  display: grid; place-items: center; width: 48px; height: 48px;
-  color: white; border: 1px solid #d078e8; border-radius: 50%;
-  background: linear-gradient(140deg, #8d35b9, #d342b4); box-shadow: 0 4px 20px #b84cc747;
-}
-.tv-launch svg { width: 24px; height: 24px; }
-.tv-launch:hover { filter: brightness(1.18); }
 
 .hero { text-align: center; padding-top: 38px; }
 .brand-mark { display: block; margin: 0 auto 34px; border-radius: 16px; box-shadow: 0 10px 32px #11162b; }
@@ -73,26 +65,17 @@ h2 { font-size: 1.5rem; }
 .create-section { max-width: 664px; margin: 62px auto 0; text-align: center; }
 .create-section h2 { color: var(--blue); font-size: 1.8rem; }
 .section-description { margin: 8px 0 22px; }
-.cards { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 .card { border: 1px solid var(--border); border-radius: 12px; background: var(--panel); }
-.cards .card { padding: 24px; display: flex; align-items: center; flex-direction: column; }
+.quick { max-width: 445px; margin-inline: auto; padding: 24px; display: flex; align-items: center; flex-direction: column; }
 .card.quick { background: linear-gradient(135deg, #142b36, #1b253d); border-color: #29566a; }
-.card.lifetime { background: linear-gradient(135deg, #392920, #302124); border-color: #6b4930; }
 .orb { display: inline-grid; place-items: center; width: 62px; height: 62px; border-radius: 50%; }
 .orb svg { width: 29px; height: 29px; }
 .orb.cyan { box-shadow: 0 7px 22px #0ca3c33b; }
 .orb.orange { color: white; box-shadow: 0 7px 22px #ff941b40; }
 .orb.blue { background: linear-gradient(130deg, #2c7ef1, #6251df); box-shadow: 0 7px 22px #4b70fc45; }
-.cards h3 { margin: 17px 0 5px; font-size: 1.23rem; }
-.quick h3 { color: #7ce4f6; }
-.lifetime h3 { color: #ffd577; }
-.cards .small { color: #a2adc1; font-size: .82rem; }
-.badge {
-  display: inline-flex; margin: 9px 0 15px; border-radius: 20px; padding: 3px 11px;
-  color: #82e3bb; background: #1c574c80; font-size: .75rem; font-weight: 650;
-}
-.lifetime .badge { color: #f4ce9d; background: #7e552b55; }
-.cards .button { width: 100%; margin-top: auto; }
+.quick h3 { margin: 17px 0 5px; font-size: 1.23rem; color: #7ce4f6; }
+.quick .small { color: #a2adc1; font-size: .82rem; }
+.quick .button { width: 100%; margin-top: 16px; }
 
 .join { max-width: 445px; margin: 30px auto 0; padding: 24px 28px; text-align: center; scroll-margin: 20px; }
 .join h2 { margin-top: 17px; color: #a9cbff; }
@@ -108,9 +91,6 @@ h2 { font-size: 1.5rem; }
 }
 input::placeholder { color: #a7b1c1; font-weight: 400; }
 .error { margin: 12px 0 0; color: #ffaaa5; }
-.tv-card { max-width: 664px; margin: 60px auto; padding: 28px; text-align: center; border-color: #38598c; }
-.tv-card h2 { margin-top: 15px; }
-.tv-card p { margin: 10px 0 18px; }
 .footer {
   max-width: 760px; padding: 23px 0 28px; margin: 35px auto 0; border-top: 1px solid #283142;
   display: flex; justify-content: space-between; flex-wrap: wrap; gap: 15px; color: var(--muted); font-size: .85rem;
@@ -168,8 +148,6 @@ progress { display: block; width: 100%; margin-top: 7px; accent-color: #5a96f7; 
 .guide-steps li { margin-bottom: 12px; padding: 16px; }
 .guide-steps h2 { display: inline; font-size: 1.1rem; }
 .guide-steps p { margin-top: 5px; }
-.tv-page .join { margin-top: 0; }
-.tv-page .join h2 { margin-top: 0; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 
 @media (max-width: 810px) {
@@ -183,9 +161,6 @@ progress { display: block; width: 100%; margin-top: 7px; accent-color: #5a96f7; 
   .hero-actions { gap: 9px; }
   .hero-actions .button { min-width: 0; padding-inline: 12px; }
   .create-section { margin-top: 45px; }
-  .cards { gap: 10px; }
-  .cards .card { padding: 15px 8px; }
-  .cards .button { padding-inline: 7px; font-size: .88rem; }
   .join { padding: 20px 14px; }
   .room-share { grid-template-columns: 1fr; }
   #qr { justify-self: center; }

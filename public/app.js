@@ -84,22 +84,12 @@ function home() {
   <section class="create-section" aria-labelledby="create-title">
     <h2 id="create-title">Create a Room</h2>
     <p class="section-description">Start a quick share and send the room code to another device.</p>
-    <div class="cards">
-      <article class="card quick">
-        <span class="orb cyan">${icon('bolt')}</span>
-        <h3>Quick Share</h3>
-        <p>24 hours</p><p class="small">500 MB per file</p>
-        <span class="badge">Free</span>
-        <button id="create-room" class="button cyan">Start Now</button>
-      </article>
-      <article class="card lifetime">
-        <span class="orb orange">${icon('crown')}</span>
-        <h3>Lifetime Room</h3>
-        <p>Never expires</p><p class="small">1 GB per file on FireSend</p>
-        <span class="badge">Original service</span>
-        <a class="button orange" href="https://firesend.download/vip">View on FireSend</a>
-      </article>
-    </div>
+    <article class="card quick">
+      <span class="orb cyan">${icon('bolt')}</span>
+      <h3>Quick Share</h3>
+      <p>24 hours</p><p class="small">500 MB per file</p>
+      <button id="create-room" class="button cyan">Start Now</button>
+    </article>
     <p id="create-error" class="error" role="alert" hidden></p>
   </section>
   <section class="card join" id="join" aria-labelledby="join-title">
@@ -107,12 +97,6 @@ function home() {
     <h2 id="join-title">Join Room</h2>
     <p>Enter the six-character code for your room.</p>
     ${joinForm()}
-  </section>
-  <section class="card tv-card" aria-labelledby="tv-title">
-    <span class="orb blue">${icon('tv')}</span>
-    <h2 id="tv-title">FireSend for Fire TV &amp; Android TV</h2>
-    <p>Open FireSend in your TV browser and enter a room code to find your shared files.</p>
-    <a href="/tv" class="button outline">Open TV Mode ${icon('arrow')}</a>
   </section>`;
   bindJoin();
   const button = document.querySelector('#create-room');
@@ -434,18 +418,8 @@ function guide() {
     </ol><a href="/" class="button primary">Go to FireSend ${icon('arrow')}</a></div>`;
 }
 
-function tv() {
-  app.innerHTML = `<div class="page tv-page">${backLink()}<header class="room-header">
-    <span class="orb blue">${icon('tv')}</span><h1>FireSend TV</h1>
-    <p>Enter a room code to see files shared with your TV.</p></header>
-    <section class="card join"><h2>Join Room</h2>${joinForm()}</section></div>`;
-  bindJoin();
-  document.querySelector('#room-code').focus();
-}
-
 const currentPath = location.pathname.replace(/\/$/, '') || '/';
 if (currentPath.startsWith('/room/')) roomPage(currentPath.slice(6).toUpperCase());
 else if (currentPath === '/public-rooms') publicRooms();
 else if (currentPath === '/guide') guide();
-else if (currentPath === '/tv') tv();
 else home();
