@@ -1177,6 +1177,10 @@ try {
 }
 
 loadSession().catch((error) => {
-  setAccount(null);
-  showError($('#access-error'), error.message);
+  if (state.authMode === 'passphrase') showPassphraseScreen(error.message);
+  else if (state.authMode === 'ip') showIpScreen(error.message);
+  else {
+    setAccount(null);
+    showError($('#access-error'), error.message);
+  }
 });
