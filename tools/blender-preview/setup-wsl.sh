@@ -13,7 +13,13 @@ mkdir -p "$runtime"
 export UV_PYTHON_INSTALL_DIR="$runtime/python"
 export UV_CACHE_DIR="${UV_CACHE_DIR:-$runtime/cache}"
 "$uv" python install 3.13 --no-bin
-if [[ ! -x "$runtime/env/bin/python" ]]; then
-    "$uv" venv --managed-python --python 3.13 "$runtime/env"
+python="$(realpath -e "$runtime/env/bin/python" 2>/dev/null || true)"
+if [[ "$python" != "$runtime/python/"* || ! -x "$python" ]]; then
+    # A moved checkout can leave an absolute Python link pointing to the old location.
+  if [[ -L "$runtime/env" || ( -e "$runtime/env" && ! -f "$runtime/env/pyvenv.cfg" ) ]]; then
+    echo "Expected a managed Blender environment at $runtime/env." >&2
+    exit 1
+  fi
+  "$uv" venv --clear --managed-python --python 3.13 "$runtime/env"
 fi
 "$uv" pip install --python "$runtime/env/bin/python" --only-binary=:all: bpy==5.2.3

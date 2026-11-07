@@ -58,7 +58,7 @@ sudo apt install bubblewrap
 bash tools/blender-preview/setup-wsl.sh
 ```
 
-Set `BLENDER_PREVIEW_WSL_DISTRO=Ubuntu` in `.env` and restart FireSend. Use your distribution’s actual name from `wsl --list --quiet`. The setup installs the Linux Blender runtime into the project’s ignored `tools/blender-runtime` folder. FireSend runs it in a Bubblewrap sandbox without access to the drive files or network. On Windows, the WSL setting takes precedence when both runners are configured.
+Set `BLENDER_PREVIEW_WSL_DISTRO=Ubuntu` in `.env` and restart FireSend. Use your distribution’s actual name from `wsl --list --quiet`. The setup installs the Linux Blender runtime into the project’s ignored `tools/blender-runtime` folder. FireSend runs it in a Bubblewrap sandbox without access to the drive files or network. On Windows, the WSL setting takes precedence when both runners are configured. If you move the checkout, rerun the WSL setup script to repair the local Python environment.
 
 **Docker.** Build the converter on the FireSend host with Docker running in Linux-container mode.
 
@@ -68,7 +68,7 @@ docker build --platform linux/amd64 -t firesend-blender-preview ./tools/blender-
 
 Set `BLENDER_PREVIEW_IMAGE=firesend-blender-preview` in `.env` and restart FireSend. Set `DOCKER_PATH` if Docker is outside the server’s PATH. ARM hosts need Docker’s AMD64 emulation for this image.
 
-FireSend converts the active scene to GLB on the first preview and caches it for later views. Pack textures into the Blender file before uploading. Both runners receive the upload through a pipe, disable automatic Blender scripts, and limit conversion to 60 seconds and 128 MiB each for the upload and resulting GLB.
+FireSend converts the active scene to GLB on the first preview and caches it for later views. Pack textures into the Blender file before uploading. The 3D viewer opens in Orbit mode. Switch to **Fly** to move with WASD, move vertically with R/F, and look around by clicking or dragging. The speed slider adjusts movement for the current scene. Both runners receive the upload through a pipe, disable automatic Blender scripts, and limit conversion to 60 seconds and 128 MiB each for the upload and resulting GLB.
 
 ## Configuration
 

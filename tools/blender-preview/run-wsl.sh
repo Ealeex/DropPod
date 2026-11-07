@@ -3,8 +3,9 @@ set -euo pipefail
 
 here="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 runtime="$(realpath -m "$here/../blender-runtime")"
+python="$(realpath -e "$runtime/env/bin/python" 2>/dev/null || true)"
 if ! command -v bwrap >/dev/null || ! command -v timeout >/dev/null || ! command -v prlimit >/dev/null ||
-    [[ ! -x "$runtime/env/bin/python" ]]; then
+    [[ "$python" != "$runtime/python/"* || ! -x "$python" ]]; then
     echo "Run tools/blender-preview/setup-wsl.sh in the configured WSL distribution first." >&2
     exit 125
 fi
