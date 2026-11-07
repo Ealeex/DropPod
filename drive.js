@@ -3,12 +3,17 @@ const { DatabaseSync } = require('node:sqlite');
 const { createHash, randomBytes, randomUUID, scrypt, timingSafeEqual } = require('node:crypto');
 const { promisify } = require('node:util');
 const { execFile, spawn } = require('node:child_process');
-const { mkdirSync } = require('node:fs');
+const { createReadStream, createWriteStream, mkdirSync } = require('node:fs');
+const { tmpdir } = require('node:os');
+const { Transform } = require('node:stream');
+const { pipeline } = require('node:stream/promises');
+const { createGunzip } = require('node:zlib');
 const { isIP } = require('node:net');
 const path = require('node:path');
-const { open, unlink } = require('node:fs/promises');
+const { mkdtemp, open, rm, unlink } = require('node:fs/promises');
 const { createMediaPreviews } = require('./media-preview');
 const { createBlendPreviews } = require('./blend-preview');
+const { createOfficePreviews, officeFormats } = require('./office-preview');
 const { createDownloads } = require('./downloads');
 const { resolveSevenZip } = require('./tool-paths');
 
@@ -23,13 +28,15 @@ const authWindow = 15 * 60 * 1000;
 
 const previewFormats = new Map(Object.entries({
   '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.gif': 'image/gif',
-  '.webp': 'image/webp', '.avif': 'image/avif', '.bmp': 'image/bmp',
+  '.svg': 'image/svg+xml', '.webp': 'image/webp', '.avif': 'image/avif', '.bmp': 'image/bmp',
   '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.ogg': 'audio/ogg', '.m4a': 'audio/mp4',
   '.mp4': 'video/mp4', '.webm': 'video/webm',
   '.txt': 'text/plain', '.md': 'text/plain', '.csv': 'text/plain', '.tsv': 'text/plain',
-  '.json': 'text/plain', '.log': 'text/plain', '.gltf': 'text/plain',
+  '.json': 'text/plain', '.log': 'text/plain', '.gltf': 'model/gltf+json',
+  '.glb': 'model/gltf-binary', '.blend': 'model/gltf-binary', '.stl': 'model/stl',
   '.dae': 'model/vnd.collada+xml', '.obj': 'model/obj', '.mtl': 'text/plain', '.pdf': 'application/pdf',
-  '.fbx': 'model/fbx', '.blend': 'model/gltf-binary',
+  '.fbx': 'model/fbx',
+  '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
 }));
 const codeLanguages = new Map(Object.entries({
   '.js': 'javascript', '.mjs': 'javascript', '.cjs': 'javascript', '.jsx': 'javascript',
@@ -43,7 +50,7 @@ const codeLanguages = new Map(Object.entries({
   '.sql': 'sql', '.graphql': 'graphql', '.diff': 'diff', '.patch': 'diff', '.md': 'markdown',
   makefile: 'makefile', dockerfile: 'dockerfile',
 }));
-const archiveFormats = new Map(Object.entries({ '.zip': 'zip', '.7z': '7z' }));
+const archiveFormats = new Map(Object.entries({ '.zip': 'zip', '.7z': '7z', '.rar': 'rar', '.tar': 'tar', '.tgz': 'tar.gz' }));
 const convertedFormats = new Map([
   ...['.mov', '.mkv', '.avi', '.wmv', '.asf', '.flv', '.m4v', '.mpg', '.mpeg', '.m2ts', '.3gp', '.3g2', '.ogv']
     .map((extension) => [extension, 'video']),
@@ -55,6 +62,7 @@ const convertedFormats = new Map([
 const compatibleMediaTypes = new Map([['image', 'image/png'], ['audio', 'audio/mp4'], ['video', 'video/mp4']]);
 const maxTextPreview = 128 * 1024;
 const maxArchiveEntry = 64 * 1024 * 1024;
+const maxExpandedTar = 256 * 1024 * 1024;
 const maxArchiveEntries = 50_000;
 
 function codeLanguage(name) {
@@ -67,13 +75,18 @@ function previewFormat(name) {
 }
 
 function archiveFormat(name) {
-  return archiveFormats.get(path.extname(name).toLowerCase()) || null;
+  const lower = name.toLowerCase();
+  return lower.endsWith('.tar.gz') ? 'tar.gz' : archiveFormats.get(path.extname(lower)) || null;
 }
 
 function previewKind(name, { archiveEntry = false } = {}) {
   if (archiveFormat(name)) return 'archive';
+  const extension = path.extname(name).toLowerCase();
+  if (!archiveEntry && officeFormats.has(extension)) return 'office';
+  if (extension === '.xlsx') return archiveEntry ? null : 'spreadsheet';
+  if (archiveEntry && extension === '.gltf') return 'text';
   const format = previewFormat(name);
-  if (!format) return archiveEntry ? null : convertedFormats.get(path.extname(name).toLowerCase()) || null;
+  if (!format) return archiveEntry ? null : convertedFormats.get(extension) || null;
   if (format.startsWith('model/')) return 'model';
   if (format === 'application/pdf') return 'pdf';
   return format.split('/')[0];
@@ -113,8 +126,8 @@ function parseArchiveListing(output) {
   for (const item of records) {
     if (!item.Path) continue;
     const name = item.Path.split(/[\\/]/).pop() || item.Path;
-    // The 7z format reports directories in Attributes instead of Folder.
-    const folder = item.Folder === '+' || (item.Folder === undefined && item.Attributes?.startsWith('D'));
+    const folder = item.Folder === '+' || (item.Folder === undefined &&
+      (item.Attributes?.startsWith('D') || item.Mode?.startsWith('d')));
     const size = Number(item.Size) || 0;
     const kind = folder ? null : previewKind(name, { archiveEntry: true });
     const preview = kind === 'model' || kind === 'archive' ? null : kind;
@@ -313,6 +326,7 @@ function createDriveRouter({ data, uploads, upload, removeBlob, authMode = 'acco
   const router = express.Router();
   const db = openDrive(data);
   const mediaPreviews = createMediaPreviews(data, uploads);
+  const officePreviews = createOfficePreviews(data, uploads);
   const blendPreviews = createBlendPreviews(data, uploads);
   const getItem = db.prepare('SELECT * FROM drive_items WHERE id = ?');
   const findChildFolder = db.prepare("SELECT id FROM drive_items WHERE parent_id = ? AND name_key = ? AND kind = 'folder'");
@@ -369,12 +383,33 @@ function createDriveRouter({ data, uploads, upload, removeBlob, authMode = 'acco
     return { kind: previewKind(file.name), format: previewFormat(file.name) };
   }
 
-  function archivePath(file) {
-    return path.join(uploads, file.id);
+  async function withArchive(file, inspect) {
+    const source = path.join(uploads, file.id);
+    if (archiveFormat(file.name) !== 'tar.gz') return inspect(source);
+    const directory = await mkdtemp(path.join(tmpdir(), 'droppod-tar-'));
+    const tar = path.join(directory, 'archive.tar');
+    let size = 0;
+    try {
+      const limit = new Transform({
+        transform(chunk, encoding, callback) {
+          size += chunk.length;
+          if (size > maxExpandedTar) {
+            return callback(Object.assign(new Error('TAR preview is limited to 256 MiB after decompression.'), { status: 413 }));
+          }
+          callback(null, chunk);
+        },
+      });
+      await pipeline(createReadStream(source), createGunzip(), limit, createWriteStream(tar), {
+        signal: AbortSignal.timeout(60_000),
+      });
+      return await inspect(tar);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   }
 
-  async function listArchive(file) {
-    const output = await runSevenZip(sevenZip, ['l', '-slt', '-ba', '-sccUTF-8', '--', archivePath(file)]);
+  async function listArchive(source) {
+    const output = await runSevenZip(sevenZip, ['l', '-slt', '-ba', '-sccUTF-8', '--', source]);
     return parseArchiveListing(output);
   }
 
@@ -407,8 +442,7 @@ function createDriveRouter({ data, uploads, upload, removeBlob, authMode = 'acco
         cleanupRequested = false;
         for (const { id } of pendingCleanup.all()) {
           try {
-            await mediaPreviews.remove(id);
-            await blendPreviews.remove(id);
+            await Promise.all([mediaPreviews.remove(id), officePreviews.remove(id), blendPreviews.remove(id)]);
             await unlink(path.join(uploads, id)).catch((error) => {
               if (error.code !== 'ENOENT') throw error;
             });
@@ -947,10 +981,11 @@ function createDriveRouter({ data, uploads, upload, removeBlob, authMode = 'acco
     const format = archiveFormat(file.name);
     if (!format) return res.status(415).json({ error: 'Archive preview is unavailable for this file type.' });
     try {
-      const entries = await listArchive(file);
+      const entries = await withArchive(file, listArchive);
       const totalSize = entries.reduce((sum, entry) => sum + (entry.folder ? 0 : entry.size), 0);
       res.json({ format, entries, totalSize });
     } catch (error) {
+      if (error.status === 413) return res.status(413).json({ error: error.message });
       if (error.code === 'ENOENT') {
         return res.status(501).json({ error: 'Archive viewing requires 7-Zip on the server.' });
       }
@@ -968,18 +1003,24 @@ function createDriveRouter({ data, uploads, upload, removeBlob, authMode = 'acco
       return res.status(400).json({ error: 'Choose a valid archive entry.' });
     }
     try {
-      const entries = await listArchive(file);
-      const entry = entries.find((candidate) => !candidate.folder && candidate.path === entryPath);
-      if (!entry) return res.status(404).json({ error: 'Archive entry not found.' });
-      if (entry.encrypted) return res.status(422).json({ error: 'This archive entry is encrypted.' });
-      if (entry.preview !== 'text' && entry.size > maxArchiveEntry) {
-        return res.status(413).json({ error: 'This archive entry is too large to preview.' });
-      }
-      const buffer = await extractArchiveEntry(sevenZip, archivePath(file), entry);
+      const result = await withArchive(file, async (source) => {
+        const entries = await listArchive(source);
+        const entry = entries.find((candidate) => !candidate.folder && candidate.path === entryPath);
+        if (!entry) return { status: 404, error: 'Archive entry not found.' };
+        if (entry.encrypted) return { status: 422, error: 'This archive entry is encrypted.' };
+        if (entry.preview !== 'text' && entry.size > maxArchiveEntry) {
+          return { status: 413, error: 'This archive entry is too large to preview.' };
+        }
+        const buffer = await extractArchiveEntry(sevenZip, source, entry);
+        const type = entry.preview === 'text' ? 'text/plain' : previewFormat(entry.name);
+        return { buffer, type };
+      });
+      if (result.error) return res.status(result.status).json({ error: result.error });
       res.set('Content-Security-Policy', "default-src 'none'; sandbox");
-      res.type(previewFormat(entry.name) || 'application/octet-stream');
-      res.send(buffer);
+      res.type(result.type || 'application/octet-stream');
+      res.send(result.buffer);
     } catch (error) {
+      if (error.status === 413) return res.status(413).json({ error: error.message });
       if (error.code === 'ENOENT') {
         return res.status(501).json({ error: 'Archive viewing requires 7-Zip on the server.' });
       }
@@ -1006,16 +1047,29 @@ function createDriveRouter({ data, uploads, upload, removeBlob, authMode = 'acco
   router.get('/files/:id/thumbnail', async (req, res) => {
     const file = getItem.get(req.params.id);
     if (file?.kind !== 'file') return res.sendStatus(404);
-    const { kind } = await filePreview(file);
+    const { kind, format } = await filePreview(file);
+    if (format === 'image/svg+xml') {
+      res.set('Content-Security-Policy', "default-src 'none'; sandbox");
+      res.type(format);
+      return res.sendFile(file.id, { root: uploads, cacheControl: false });
+    }
     if (kind !== 'image' && kind !== 'video') return res.sendStatus(415);
     await sendMediaPreview(res, file, 'thumbnail', kind, 'image/jpeg');
+  });
+
+  router.get('/files/:id/model-buffer', (req, res) => {
+    const file = getItem.get(req.params.id);
+    if (file?.kind !== 'file' || !/\.bin$/i.test(file.name)) return res.sendStatus(404);
+    res.set('Content-Security-Policy', "default-src 'none'; sandbox");
+    res.type('application/octet-stream');
+    res.sendFile(file.id, { root: uploads, cacheControl: false });
   });
 
   router.get('/files/:id/preview', async (req, res) => {
     const file = getItem.get(req.params.id);
     if (file?.kind !== 'file') return res.status(404).json({ error: 'File not found.' });
     const { kind, format } = await filePreview(file);
-    if (format === 'model/gltf-binary') {
+    if (/\.blend$/i.test(file.name)) {
       try {
         const generated = await blendPreviews.get(file.id);
         if (res.destroyed) return;
@@ -1028,6 +1082,21 @@ function createDriveRouter({ data, uploads, upload, removeBlob, authMode = 'acco
         if (error.status) return res.status(error.status).json({ error: error.message });
         if (error.code === 'ENOENT') return res.status(404).json({ error: 'File not found.' });
         throw error;
+      }
+    }
+    if (kind === 'office') {
+      try {
+        const generated = await officePreviews.get(file);
+        if (res.destroyed) return;
+        if (!getItem.get(file.id)) return res.sendStatus(404);
+        res.set('Content-Security-Policy', "default-src 'none'; sandbox");
+        res.type('application/pdf');
+        return res.sendFile(path.basename(generated), { root: path.dirname(generated), cacheControl: false });
+      } catch (error) {
+        if (res.destroyed) return;
+        return res.status(error.status || 422).json({
+          error: error.status ? error.message : 'This Office file could not be converted for preview.',
+        });
       }
     }
     if ((!format || req.query.compatible === '1') && compatibleMediaTypes.has(kind)) {

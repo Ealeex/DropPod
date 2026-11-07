@@ -1,0 +1,8 @@
+- [x] Add a 3d preview. Listed is a potato.dae and potato.png in the Wishlist directory. The idea is that if they are both present in the same folder in the drive, then opening the preview will show a rotatable preview with albedo lighting
+- [x] Add 7z and zip archive viewing. Clicking an archive file opens a browsable view of its contents. Uses 7-Zip on the server to list and extract entries.
+- [x] Show the IP address that the user is connecting from on the register and login page for IP mode.
+- [x] Add PDF preview support.
+- [x] Add a small upload/download widget that shows progress bar and gives a simple Est Time.
+- [x] Downloading folder support. Zip using 7z into .zip format. medium compression. Zip progress is shown in widget listed above.
+- [x] Add Copy Share Link button to files and folders. It generates a link that anyone can click and it instantly starts a download without requiring access to the drive or registration at all. If a folder is shared, use 7z to compress it first before downloading it.
+- [ ] The reset password button for admins should set no passwords and must be created again. Not the admin creating a new password and giving it to them.

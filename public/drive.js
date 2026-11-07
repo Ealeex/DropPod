@@ -28,6 +28,9 @@ const pageError = $('#page-error');
 const previewPanel = $('#preview-panel');
 const previewBody = $('#preview-content');
 const previewResize = $('#preview-resize');
+const previewPrevious = $('#previous-preview');
+const previewNext = $('#next-preview');
+const previewExpand = $('#expand-preview');
 const contextMenu = $('#context-menu');
 let menuTrigger = null;
 
@@ -497,8 +500,10 @@ async function copyShareLink(item) {
 function closePreview({ restoreFocus = false } = {}) {
   const preview = state.preview;
   if (!preview) return;
+  preview.controller.abort();
   preview.dispose?.();
   state.preview = null;
+  setPreviewExpanded(false);
   preview.trigger.setAttribute('aria-expanded', 'false');
   if (restoreFocus && preview.trigger.isConnected) preview.trigger.focus();
   previewPanel.classList.remove('is-open');
@@ -506,53 +511,6 @@ function closePreview({ restoreFocus = false } = {}) {
   previewPanel.setAttribute('aria-hidden', 'true');
   previewBody.className = 'preview-content';
   previewBody.replaceChildren();
-}
-
-function previewMessage(message) {
-  const text = document.createElement('p');
-  text.className = 'preview-message';
-  text.textContent = message;
-  previewBody.replaceChildren(text);
-}
-
-function renderTextPreview(host, text, item) {
-  const pre = document.createElement('pre');
-  const code = document.createElement('code');
-  code.textContent = text;
-  pre.append(code);
-  host.replaceChildren(pre);
-  if (item.previewTruncated) host.append(archiveMessage('Showing the first 128 KB.'));
-  if (item.language) colorizeCode(code, item.language);
-}
-
-async function colorizeCode(code, language) {
-  try {
-    const { default: highlighter } = await import('/vendor/highlight/highlight.min.js');
-    if (!highlighter.getLanguage(language)) {
-      const { default: grammar } = await import(`/vendor/highlight/languages/${encodeURIComponent(language)}.min.js`);
-      highlighter.registerLanguage(language, grammar);
-    }
-    if (!code.isConnected) return;
-    code.className = `language-${language}`;
-    highlighter.highlightElement(code);
-  } catch {
-    // Keep the plain text readable when a highlighting module cannot load.
-  }
-}
-
-function openPdfPreview(host, url) {
-  let dispose;
-  let closed = false;
-  host.replaceChildren(archiveMessage('Loading PDF…'));
-  import('./pdf-preview.mjs').then(({ createPdfPreview }) => {
-    if (!closed) dispose = createPdfPreview(host, url);
-  }).catch(() => {
-    if (!closed) host.replaceChildren(archiveMessage('The PDF preview could not be opened.'));
-  });
-  return () => {
-    closed = true;
-    dispose?.();
-  };
 }
 
 const previewWidthKey = 'firesend:preview-width';
@@ -611,240 +569,44 @@ async function handlePreviewAuth(response) {
   return true;
 }
 
-function archiveEntryUrl(item, entry) {
-  return `/api/drive/files/${encodeURIComponent(item.id)}/archive/entry?path=${encodeURIComponent(entry.path)}`;
+function setPreviewExpanded(expanded) {
+  previewPanel.classList.toggle('is-expanded', expanded);
+  previewExpand.setAttribute('aria-pressed', String(expanded));
+  previewExpand.textContent = expanded ? 'Restore drawer' : 'Full screen';
+  previewResize.tabIndex = expanded ? -1 : 0;
 }
 
-function buildArchiveTree(entries) {
-  const root = { folders: new Map(), files: [], size: 0 };
-  for (const entry of entries) {
-    const parts = entry.path.split(/[\\/]/).filter(Boolean);
-    if (!parts.length) continue;
-    const folders = entry.folder ? parts : parts.slice(0, -1);
-    let node = root;
-    for (const folder of folders) {
-      let child = node.folders.get(folder);
-      if (!child) {
-        child = { folders: new Map(), files: [], size: 0 };
-        node.folders.set(folder, child);
-      }
-      node = child;
-    }
-    if (!entry.folder) node.files.push({ ...entry, name: parts.at(-1) });
-  }
-  const total = (node) => {
-    let size = node.files.reduce((sum, file) => sum + file.size, 0);
-    for (const child of node.folders.values()) size += total(child);
-    node.size = size;
-    return size;
-  };
-  total(root);
-  return root;
+function previewNeighbors() {
+  const files = state.folder?.items.filter((item) => item.kind === 'file' && item.preview) || [];
+  const index = files.findIndex((item) => item.id === state.preview?.item.id);
+  return index < 0 ? [] : [files[index - 1], files[index + 1]];
 }
 
-function createArchiveBrowser(item, entries, preview) {
-  const root = buildArchiveTree(entries);
-  const container = document.createElement('div');
-  container.className = 'archive-view';
-  const toolbar = document.createElement('div');
-  toolbar.className = 'archive-toolbar';
-  const content = document.createElement('div');
-  content.className = 'archive-content';
-  container.append(toolbar, content);
-
-  let path = [];
-  let node = root;
-  let requestVersion = 0;
-  let disposeEntry;
-
-  function showToolbar(back, label) {
-    toolbar.replaceChildren();
-    if (back) toolbar.append(makeButton('Back', back, 'text-button'));
-    const crumb = document.createElement('span');
-    crumb.className = 'archive-path';
-    crumb.textContent = label;
-    toolbar.append(crumb);
-  }
-
-  function goTo(nextPath) {
-    path = nextPath;
-    node = root;
-    for (const part of path) node = node.folders.get(part) || node;
-    renderFolder();
-  }
-
-  function renderFolder() {
-    requestVersion += 1;
-    disposeEntry?.();
-    disposeEntry = null;
-    showToolbar(path.length ? () => goTo(path.slice(0, -1)) : null, `/${path.join('/')}`);
-    const folders = [...node.folders.entries()].sort(([a], [b]) => a.localeCompare(b));
-    const files = [...node.files].sort((a, b) => a.name.localeCompare(b.name));
-    const count = folders.length + files.length;
-    const summary = document.createElement('p');
-    summary.className = 'archive-summary meta';
-    summary.textContent = count ? `${count} item${count === 1 ? '' : 's'} · ${sizeLabel(node.size)}` : 'This folder is empty.';
-    const list = document.createElement('ul');
-    list.className = 'archive-list';
-
-    for (const [folderName, child] of folders) {
-      const row = makeButton('', () => goTo([...path, folderName]), 'archive-row');
-      row.title = [...path, folderName].join('/');
-      row.innerHTML = `<span class="item-icon folder-icon">${icon('folder')}</span><span class="archive-row-name"></span><span class="archive-row-meta"></span>`;
-      row.querySelector('.archive-row-name').textContent = folderName;
-      row.querySelector('.archive-row-meta').textContent = sizeLabel(child.size);
-      const entry = document.createElement('li');
-      entry.append(row);
-      list.append(entry);
-    }
-
-    for (const file of files) {
-      const row = makeButton('', () => openEntry(file), 'archive-row');
-      row.title = file.path;
-      row.innerHTML = `<span class="item-icon">${icon('file')}</span><span class="archive-row-name"></span><span class="archive-row-meta"></span>`;
-      row.querySelector('.archive-row-name').textContent = file.name;
-      row.querySelector('.archive-row-meta').textContent = [
-        sizeLabel(file.size), file.encrypted ? 'Locked' : '', file.preview ? '' : 'No preview',
-      ].filter(Boolean).join(' · ');
-      const entry = document.createElement('li');
-      entry.append(row);
-      list.append(entry);
-    }
-
-    content.replaceChildren(summary, list);
-  }
-
-  async function openEntry(entry) {
-    const version = ++requestVersion;
-    disposeEntry?.();
-    disposeEntry = null;
-    showToolbar(() => renderFolder(), `/${[...path, entry.name].join('/')}`);
-    const wrapper = document.createElement('div');
-    wrapper.className = 'archive-entry';
-    content.replaceChildren(wrapper);
-
-    if (!entry.preview) {
-      wrapper.append(archiveMessage('Preview unavailable for this entry.'));
-      return;
-    }
-
-    const url = archiveEntryUrl(item, entry);
-    if (entry.preview === 'pdf') {
-      disposeEntry = openPdfPreview(wrapper, url);
-      return;
-    }
-    if (entry.preview === 'text') {
-      wrapper.append(archiveMessage('Loading…'));
-      try {
-        const response = await fetch(url);
-        if (version !== requestVersion || state.preview !== preview) return;
-        if (!response.ok) {
-          if (await handlePreviewAuth(response)) return;
-          throw new Error('Archive entry unavailable.');
-        }
-        const text = await response.text();
-        if (version !== requestVersion) return;
-        renderTextPreview(wrapper, text, entry);
-      } catch {
-        if (version === requestVersion) wrapper.replaceChildren(archiveMessage('Preview unavailable for this entry.'));
-      }
-      return;
-    }
-
-    const media = document.createElement(entry.preview === 'image' ? 'img' : entry.preview);
-    if (media instanceof HTMLImageElement) media.alt = entry.name;
-    else {
-      media.controls = true;
-      media.preload = 'metadata';
-      media.setAttribute('aria-label', entry.name);
-    }
-    media.addEventListener('error', () => {
-      if (version === requestVersion) wrapper.replaceChildren(archiveMessage('Preview unavailable for this entry.'));
-    });
-    media.src = url;
-    wrapper.replaceChildren(media);
-  }
-
-  renderFolder();
-
-  return {
-    element: container,
-    dispose() {
-      requestVersion += 1;
-      disposeEntry?.();
-    },
-  };
+function updatePreviewNavigation() {
+  const [previous, next] = previewNeighbors();
+  previewPrevious.disabled = !previous;
+  previewNext.disabled = !next;
 }
 
-function archiveMessage(message) {
-  const text = document.createElement('p');
-  text.className = 'preview-message';
-  text.textContent = message;
-  return text;
-}
-
-async function openArchivePreview(item, preview) {
-  previewMessage('Loading archive…');
-  try {
-    const response = await fetch(`/api/drive/files/${encodeURIComponent(item.id)}/archive`);
-    if (!response.ok) {
-      if (await handlePreviewAuth(response)) return;
-      const data = await response.json().catch(() => ({}));
-      throw new Error(data.error || 'Archive preview unavailable.');
-    }
-    const data = await response.json();
-    if (state.preview !== preview) return;
-    const browser = createArchiveBrowser(item, data.entries, preview);
-    preview.dispose = () => browser.dispose();
-    previewBody.replaceChildren(browser.element);
-  } catch (error) {
-    if (state.preview === preview) previewMessage(error.message || 'Archive preview unavailable.');
-  }
-}
-
-async function openModelPreview(item, preview) {
-  const url = `/api/drive/files/${encodeURIComponent(item.id)}/preview`;
-  const isBlend = /\.blend$/i.test(item.name);
-  const isFbx = /\.fbx$/i.test(item.name);
-  const controller = new AbortController();
-  preview.dispose = () => controller.abort();
-  previewMessage(isBlend ? 'Preparing Blender preview…' : 'Loading 3D model…');
-  try {
-    const response = await fetch(url, { signal: controller.signal });
-    if (!response.ok) {
-      if (await handlePreviewAuth(response)) return;
-      const error = await response.json().catch(() => ({}));
-      if (state.preview === preview) previewMessage(error.error || 'Preview unavailable.');
-      return;
-    }
-    const data = isBlend || isFbx ? await response.arrayBuffer() : await response.text();
-    if (state.preview !== preview) return;
-    const { createBlendPreview, createModelPreview, loadObjMaterials } = await import('./model-viewer.mjs');
-    if (state.preview !== preview) return;
-    const files = state.folder?.items?.filter((sibling) => sibling.kind === 'file') || [];
-    const materials = /\.obj$/i.test(item.name) ? await loadObjMaterials(data, files) : '';
-    if (state.preview !== preview) return;
-    const model = isFbx ? { buffer: data } : { text: data };
-    const viewer = isBlend ? await createBlendPreview(data, item.name)
-      : createModelPreview({ ...model, name: item.name, files, materials });
-    if (state.preview !== preview) {
-      viewer.dispose();
-      return;
-    }
-    preview.dispose = () => viewer.dispose();
-    previewBody.classList.add('model-mode');
-    previewBody.replaceChildren(viewer.element);
-  } catch (error) {
-    if (controller.signal.aborted) return;
-    console.error(error);
-    if (state.preview === preview) previewMessage('Preview unavailable. The model could not be rendered.');
-  }
+function navigatePreview(direction) {
+  const item = previewNeighbors()[direction];
+  if (!item) return;
+  const row = $('#items').querySelector('[data-item-id="' + item.id + '"]');
+  const trigger = row?.querySelector('.preview-trigger');
+  if (!trigger) return;
+  const focus = document.activeElement;
+  openPreview(item, trigger, { focus: false });
+  if (focus.disabled) (direction ? previewPrevious : previewNext).focus();
 }
 
 async function openPreview(item, trigger, { focus = true } = {}) {
+  const expanded = previewPanel.classList.contains('is-expanded');
   closePreview();
+  setPreviewExpanded(expanded);
   previewBody.className = 'preview-content';
-  const preview = { item, trigger };
+  previewBody.scrollTop = 0;
+  previewBody.scrollLeft = 0;
+  const preview = { item, trigger, controller: new AbortController() };
   state.preview = preview;
   trigger.setAttribute('aria-expanded', 'true');
   $('#preview-name').textContent = item.name;
@@ -856,74 +618,19 @@ async function openPreview(item, trigger, { focus = true } = {}) {
   previewPanel.inert = false;
   previewPanel.removeAttribute('aria-hidden');
   previewPanel.classList.add('is-open');
+  updatePreviewNavigation();
   if (focus) $('#close-preview').focus();
 
-  const url = `/api/drive/files/${encodeURIComponent(item.id)}/preview`;
-  if (item.preview === 'archive') {
-    openArchivePreview(item, preview);
-    return;
-  }
-  if (item.preview === 'model') {
-    openModelPreview(item, preview);
-    return;
-  }
-  if (item.preview === 'pdf') {
-    preview.dispose = openPdfPreview(previewBody, url);
-    return;
-  }
-  if (item.preview === 'text') {
-    previewMessage('Loading preview…');
-    try {
-      const response = await fetch(url);
-      if (!response.ok) {
-        if (response.status === 401) {
-          const data = await response.json().catch(() => ({}));
-          if (data.passphraseRequired) showPassphraseScreen('Enter the passphrase to continue.');
-          else if (data.ipRequired) loadSession().catch(() => {});
-          else setAccount(null);
-        }
-        throw new Error('Preview unavailable.');
-      }
-      const text = await response.text();
-      if (state.preview !== preview) return;
-      renderTextPreview(previewBody, text, item);
-    } catch (error) {
-      if (state.preview === preview) previewMessage('Preview unavailable. Download the file to open it.');
-    }
-    return;
-  }
-  if (['image', 'audio', 'video'].includes(item.preview)) {
-    const media = document.createElement(item.preview === 'image' ? 'img' : item.preview);
-    if (media instanceof HTMLImageElement) media.alt = item.name;
-    else {
-      media.controls = true;
-      media.preload = 'metadata';
-      media.setAttribute('aria-label', item.name);
-    }
-    let converted = Boolean(item.convertPreview);
-    let loading;
-    function showConversion() {
-      loading = archiveMessage('Preparing a compatible preview…');
-      loading.setAttribute('role', 'status');
-      previewBody.append(loading);
-    }
-    media.addEventListener(item.preview === 'image' ? 'load' : 'loadedmetadata', () => loading?.remove());
-    media.addEventListener('error', () => {
-      if (state.preview !== preview) return;
-      if (!converted) {
-        converted = true;
-        showConversion();
-        media.src = `${url}?compatible=1`;
-        return;
-      }
-      previewMessage('Preview unavailable. Download the file to open it.');
-    });
-    previewBody.replaceChildren(media);
-    if (converted) showConversion();
-    media.src = url;
-    return;
-  }
-  previewMessage('Preview unavailable. Download the file to open it.');
+  const { signal } = preview.controller;
+  const { renderPreview } = await import('./previews/index.mjs');
+  if (signal.aborted) return;
+  const dispose = await renderPreview({
+    item, host: previewBody, url: '/api/drive/files/' + encodeURIComponent(item.id) + '/preview',
+    signal, onUnauthorized: handlePreviewAuth, files: state.folder?.items.filter((file) => file.kind === 'file') || [],
+    icon, sizeLabel,
+  });
+  if (signal.aborted) dispose?.();
+  else preview.dispose = dispose;
 }
 
 function renderItem(item) {
@@ -1118,6 +825,7 @@ function renderItems(items, parent) {
   if (focused.isConnected && document.activeElement !== focused && !dialog.open) focused.focus({ preventScroll: true });
   if (menuTrigger && !menuTrigger.isConnected) closeContextMenu();
   const preview = state.preview;
+  if (preview) updatePreviewNavigation();
   if (preview && !preview.trigger.isConnected) {
     const index = items.findIndex((item) => item.id === preview.item.id);
     if (index < 0) closePreview();
@@ -1911,6 +1619,9 @@ $('#ip-change-back').addEventListener('click', async () => {
   }
 });
 $('#close-dialog').addEventListener('click', () => dialog.close());
+previewPrevious.addEventListener('click', () => navigatePreview(0));
+previewNext.addEventListener('click', () => navigatePreview(1));
+previewExpand.addEventListener('click', () => setPreviewExpanded(!previewPanel.classList.contains('is-expanded')));
 $('#close-preview').addEventListener('click', () => closePreview({ restoreFocus: true }));
 document.addEventListener('click', (event) => {
   if (state.preview && !previewPanel.contains(event.target)) closePreview();
@@ -1934,7 +1645,12 @@ document.addEventListener('keydown', (event) => {
     closeContextMenu({ restoreFocus: true });
     return;
   }
-  if (event.key === 'Escape' && state.preview && !dialog.open && !document.pointerLockElement) closePreview({ restoreFocus: true });
+  if (event.key === 'Escape' && state.preview && !dialog.open && !document.pointerLockElement) {
+    if (previewPanel.classList.contains('is-expanded')) {
+      setPreviewExpanded(false);
+      previewExpand.focus();
+    } else closePreview({ restoreFocus: true });
+  }
 });
 document.addEventListener('pointerdown', (event) => {
   if (!contextMenu.contains(event.target)) closeContextMenu();

@@ -1,15 +1,11 @@
 import * as THREE from 'three';
-import { ColladaLoader } from 'three/addons/loaders/ColladaLoader.js';
-import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
-import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
-import { MTLLoader } from 'three/addons/loaders/MTLLoader.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { fetchPreview, showMessage } from './common.mjs';
 import { createFlyControls } from './fly-controls.mjs';
 
-const blankTexture = '/blank.png';
+export const blankTexture = '/blank.png';
 
-function referenceName(value) {
+export function referenceName(value) {
   try {
     const url = new URL(value.replaceAll('\\', '/'), location.href);
     return decodeURIComponent(url.pathname.split('/').pop()).toLowerCase();
@@ -18,151 +14,92 @@ function referenceName(value) {
   }
 }
 
-function textureNames(text) {
-  const document = new DOMParser().parseFromString(text, 'application/xml');
-  if (document.querySelector('parsererror')) return [];
-  const names = new Set();
-  for (const image of document.getElementsByTagName('image')) {
-    for (const source of image.getElementsByTagName('init_from')) {
-      const value = source.textContent.trim();
-      if (!value || value.startsWith('data:')) continue;
-      const name = referenceName(value);
-      if (name) names.add(name);
-    }
-  }
-  return [...names];
+export function modelAssets(files, { resolve, onLoad } = {}) {
+  const textures = new Map(files.filter((file) => file.preview === 'image').map((file) => [
+    file.name.toLowerCase(), '/api/drive/files/' + encodeURIComponent(file.id) + '/preview',
+  ]));
+  const missing = new Set();
+  const manager = new THREE.LoadingManager();
+  if (onLoad) manager.onLoad = onLoad;
+  manager.setURLModifier((url) => {
+    const override = resolve?.(url);
+    if (override) return override;
+    if (/^(?:data|blob):/i.test(url)) return blankTexture;
+    const name = referenceName(url);
+    const texture = textures.get(name);
+    if (!texture && name) missing.add(name);
+    return texture || blankTexture;
+  });
+  return { manager, missing, textures };
 }
 
-export async function loadObjMaterials(text, files) {
-  const siblings = new Map(files.filter((file) => /\.mtl$/i.test(file.name)).map((file) => [file.name.toLowerCase(), file]));
-  const libraries = new Set();
-  for (const match of text.matchAll(/^\s*mtllib[ \t]+([^\r\n]+)$/gm)) {
-    const reference = match[1].trim();
-    const references = siblings.has(referenceName(reference)) ? [reference] : reference.split(/\s+/);
-    for (const name of references) {
-      const file = siblings.get(referenceName(name));
-      if (file) libraries.add(file.id);
+export async function renderModel(context, parse, { loading = 'Loading 3D model…', useServerError = false } = {}) {
+  const { host, item, signal } = context;
+  const errorMessage = 'Preview unavailable. The model could not be rendered.';
+  showMessage(host, loading);
+  const response = await fetchPreview(context, errorMessage, useServerError);
+  let model;
+  try {
+    model = await parse(response);
+    if (signal.aborted) {
+      disposeModel(model.subject);
+      model.release?.();
+      return;
+    }
+    const subject = new THREE.Group();
+    subject.add(model.subject);
+    const viewer = createViewer(subject, item.name, model.missing || new Set());
+    host.classList.add('model-mode');
+    host.replaceChildren(viewer.element);
+    return () => {
+      viewer.dispose();
+      model.release?.();
+    };
+  } catch (error) {
+    if (model) {
+      disposeModel(model.subject);
+      model.release?.();
+    }
+    if (!signal.aborted && error.name !== 'AbortError') {
+      console.error(error);
+      throw new Error(errorMessage);
     }
   }
-  const materials = await Promise.all([...libraries].map(async (id) => {
-    const response = await fetch(`/api/drive/files/${encodeURIComponent(id)}/preview`);
-    return response.ok ? response.text() : '';
-  }));
-  return materials.join('\n');
 }
 
-function disposeModel(root) {
-  const resources = new Set();
-  const bitmaps = new Set();
-  root.traverse((object) => {
-    if (object.geometry) resources.add(object.geometry);
+function disposeModel(subject) {
+  subject.traverse((object) => {
+    object.geometry?.dispose();
     const materials = Array.isArray(object.material) ? object.material : [object.material];
     for (const material of materials) {
       if (!material) continue;
-      resources.add(material);
       for (const value of Object.values(material)) {
-        if (!value?.isTexture) continue;
-        resources.add(value);
-        const image = value.source?.data;
-        if (typeof ImageBitmap !== 'undefined' && image instanceof ImageBitmap) bitmaps.add(image);
+        if (value?.isTexture) value.dispose();
       }
+      material.dispose();
     }
   });
-  for (const resource of resources) resource.dispose();
-  for (const bitmap of bitmaps) bitmap.close();
 }
 
-export async function createBlendPreview(buffer, name) {
-  const manager = new THREE.LoadingManager();
-  manager.setURLModifier((url) => {
-    if (url.startsWith(`blob:${location.origin}/`)) return url;
-    throw new Error('The Blender preview references an external resource.');
-  });
-  const { scene } = await new GLTFLoader(manager).parseAsync(buffer, '');
-  try {
-    return createModelPreview({ name, model: scene });
-  } catch (error) {
-    disposeModel(scene);
-    throw error;
-  }
-}
-
-export function createModelPreview({ text, buffer, name, files = [], materials = '', model }) {
+function createViewer(subject, name, missing) {
   const container = document.createElement('div');
   container.className = 'model-viewer';
   container.setAttribute('role', 'group');
-  container.setAttribute('aria-label', `${name} 3D preview`);
+  container.setAttribute('aria-label', `${name} 3D preview. Drag to rotate and scroll to zoom.`);
 
   const canvasHost = document.createElement('div');
   canvasHost.className = 'model-canvas';
   container.append(canvasHost);
-
-  const textureUrls = new Map();
-  for (const file of files) {
-    if (file.preview !== 'image') continue;
-    textureUrls.set(file.name.toLowerCase(), `/api/drive/files/${encodeURIComponent(file.id)}/preview`);
-  }
-
-  const isObj = /\.obj$/i.test(name);
-  const isFbx = /\.fbx$/i.test(name);
-  const missing = new Set(model || isObj || isFbx ? [] : textureNames(text).filter((reference) => !textureUrls.has(reference)));
-  const embeddedUrls = new Set();
-  function releaseEmbeddedTextures() {
-    for (const url of embeddedUrls) URL.revokeObjectURL(url);
-    embeddedUrls.clear();
-  }
 
   const hint = document.createElement('p');
   hint.className = 'model-hint';
   hint.textContent = 'Drag to rotate · Scroll to zoom';
   container.append(hint);
 
-  const manager = new THREE.LoadingManager();
-  manager.onLoad = releaseEmbeddedTextures;
-  manager.setURLModifier((url) => {
-    if (isFbx && url.startsWith(`blob:${location.origin}/`)) {
-      embeddedUrls.add(url);
-      return url;
-    }
-    if (isFbx && /^data:image\/(?:bmp|jpeg|png|webp);base64,/i.test(url)) return url;
-    if (url.startsWith('data:') || url.startsWith('blob:')) return blankTexture;
-    const fileName = referenceName(url);
-    const texture = textureUrls.get(fileName);
-    if (!texture && (isObj || isFbx) && fileName) missing.add(fileName);
-    return texture || blankTexture;
-  });
-
-  const subject = new THREE.Group();
-  if (model) {
-    subject.add(model);
-  } else if (isFbx) {
-    try {
-      subject.add(new FBXLoader(manager).parse(buffer, ''));
-    } catch (error) {
-      releaseEmbeddedTextures();
-      throw error;
-    }
-  } else if (isObj) {
-    const loader = new OBJLoader(manager);
-    if (materials) {
-      const creator = new MTLLoader(manager).parse(materials, '');
-      loader.setMaterials({
-        create(material) {
-          if (Object.hasOwn(creator.materialsInfo, material) && !Object.hasOwn(Object.prototype, material)) {
-            return creator.create(material);
-          }
-          return undefined;
-        },
-      });
-    }
-    subject.add(loader.parse(text));
-  } else {
-    subject.add(new ColladaLoader(manager).parse(text, '').scene);
-  }
   if (missing.size) {
     const warning = document.createElement('p');
     warning.className = 'model-warning';
-    warning.textContent = `Texture not found in this folder: ${[...missing].join(', ')}. Add it to see the model's albedo texture.`;
+    warning.textContent = 'Model textures missing from this folder: ' + [...missing].join(', ');
     container.insertBefore(warning, hint);
   }
   const box = new THREE.Box3().setFromObject(subject);
@@ -285,11 +222,10 @@ export function createModelPreview({ text, buffer, name, files = [], materials =
       if (disposed) return;
       disposed = true;
       renderer.setAnimationLoop(null);
-      releaseEmbeddedTextures();
       observer.disconnect();
       fly.dispose();
       controls.dispose();
-      disposeModel(scene);
+      disposeModel(subject);
       renderer.dispose();
     },
   };

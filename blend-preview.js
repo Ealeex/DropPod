@@ -1,6 +1,6 @@
 const { execFile, spawn } = require('node:child_process');
 const { randomUUID } = require('node:crypto');
-const { createReadStream, createWriteStream, mkdirSync } = require('node:fs');
+const { createReadStream, createWriteStream, existsSync, mkdirSync } = require('node:fs');
 const { open, rename, stat, unlink } = require('node:fs/promises');
 const path = require('node:path');
 const { Transform } = require('node:stream');
@@ -145,19 +145,16 @@ function createBlendPreviews(data, uploads) {
     }
   }
 
-  function get(id) {
-    if (!runner) return Promise.reject(previewError(503, 'Blender previews are disabled on this server.'));
-    const target = output(id);
+  async function get(id) {
+    if (!runner) throw previewError(503, 'Blender previews are disabled on this server.');
     if (pending.has(id)) return pending.get(id);
-    return stat(target).then(() => target, (error) => {
-      if (error.code !== 'ENOENT') throw error;
-      if (pending.has(id)) return pending.get(id);
-      if (pending.size >= 4) throw previewError(503, 'Blender preview is busy. Try again shortly.');
-      const job = queue.then(() => generate(id, target)).finally(() => pending.delete(id));
-      pending.set(id, job);
-      queue = job.catch(() => {});
-      return job;
-    });
+    const target = output(id);
+    if (existsSync(target)) return target;
+    if (pending.size >= 4) throw previewError(503, 'Blender preview is busy. Try again shortly.');
+    const job = queue.then(() => generate(id, target)).finally(() => pending.delete(id));
+    pending.set(id, job);
+    queue = job.catch(() => {});
+    return job;
   }
 
   async function remove(id) {
