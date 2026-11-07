@@ -11,6 +11,7 @@
   <script type="importmap">
     {"imports":{"three":"/vendor/three/build/three.module.js","three/addons/":"/vendor/three/examples/jsm/"}}
   </script>
+  <link rel="stylesheet" href="/vendor/pdf/web/pdf_viewer.css">
   <link rel="stylesheet" href="/drive.css">
   <script src="/drive.js" defer></script>
 </head>
@@ -98,7 +99,12 @@
     <div id="preview-resize" class="preview-resize" role="separator" aria-orientation="vertical" aria-label="Preview width" aria-controls="preview-content" tabindex="0"></div>
     <div class="preview-header">
       <h2 id="preview-name"></h2>
-      <button id="close-preview" type="button" class="icon-button" aria-label="Close preview" title="Close preview"><svg aria-hidden="true"><use href="/icons.svg#close"></use></svg></button>
+      <div class="preview-header-actions">
+        <button id="previous-preview" type="button" class="text-button" aria-label="Previous file" title="Previous file">←</button>
+        <button id="next-preview" type="button" class="text-button" aria-label="Next file" title="Next file">→</button>
+        <button id="expand-preview" type="button" class="text-button" aria-pressed="false">Full screen</button>
+        <button id="close-preview" type="button" class="icon-button" aria-label="Close preview" title="Close preview"><svg aria-hidden="true"><use href="/icons.svg#close"></use></svg></button>
+      </div>
     </div>
     <div id="preview-content" class="preview-content"></div>
     <div class="preview-footer">

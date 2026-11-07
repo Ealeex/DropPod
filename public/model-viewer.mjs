@@ -3,6 +3,8 @@ import { ColladaLoader } from 'three/addons/loaders/ColladaLoader.js';
 import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
 import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
 import { MTLLoader } from 'three/addons/loaders/MTLLoader.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { STLLoader } from 'three/addons/loaders/STLLoader.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
 const blankTexture = '/blank.png';
@@ -49,7 +51,7 @@ export async function loadObjMaterials(text, files) {
   return materials.join('\n');
 }
 
-export function createModelPreview({ text, buffer, name, files = [], materials = '' }) {
+export async function createModelPreview({ text, buffer, name, files = [], materials = '' }) {
   const container = document.createElement('div');
   container.className = 'model-viewer';
   container.setAttribute('role', 'img');
@@ -67,7 +69,12 @@ export function createModelPreview({ text, buffer, name, files = [], materials =
 
   const isObj = /\.obj$/i.test(name);
   const isFbx = /\.fbx$/i.test(name);
-  const missing = new Set(isObj || isFbx ? [] : textureNames(text).filter((reference) => !textureUrls.has(reference)));
+  const isGltf = /\.gl(?:b|tf)$/i.test(name);
+  const isStl = /\.stl$/i.test(name);
+  const missing = new Set(/\.dae$/i.test(name) ? textureNames(text).filter((reference) => !textureUrls.has(reference)) : []);
+  const buffers = new Map(files.filter((file) => /\.bin$/i.test(file.name)).map((file) => [
+    file.name.toLowerCase(), '/api/drive/files/' + encodeURIComponent(file.id) + '/model-buffer',
+  ]));
   const embeddedUrls = new Set();
   function releaseEmbeddedTextures() {
     for (const url of embeddedUrls) URL.revokeObjectURL(url);
@@ -82,12 +89,21 @@ export function createModelPreview({ text, buffer, name, files = [], materials =
   const manager = new THREE.LoadingManager();
   manager.onLoad = releaseEmbeddedTextures;
   manager.setURLModifier((url) => {
+    if (isGltf && url.startsWith('blob:' + location.origin + '/')) return url;
     if (isFbx && url.startsWith(`blob:${location.origin}/`)) {
       embeddedUrls.add(url);
       return url;
     }
     if (isFbx && /^data:image\/(?:bmp|jpeg|png|webp);base64,/i.test(url)) return url;
+    if (isGltf && /^data:(?:application\/(?:octet-stream|gltf-buffer)|image\/(?:jpeg|png|webp|avif));base64,/i.test(url)) return url;
     if (url.startsWith('data:') || url.startsWith('blob:')) return blankTexture;
+    if (isGltf) {
+      const fileName = referenceName(url);
+      const asset = buffers.get(fileName) || textureUrls.get(fileName);
+      if (!asset) missing.add(fileName);
+      // Return a local failure for missing binary data and a placeholder for missing images.
+      return asset || (/\.bin$/i.test(fileName) ? '/api/drive/missing-model-buffer' : blankTexture);
+    }
     const fileName = referenceName(url);
     const texture = textureUrls.get(fileName);
     if (!texture && (isObj || isFbx) && fileName) missing.add(fileName);
@@ -102,6 +118,25 @@ export function createModelPreview({ text, buffer, name, files = [], materials =
       releaseEmbeddedTextures();
       throw error;
     }
+  } else if (isGltf) {
+    const loader = new GLTFLoader(manager);
+    loader.register((parser) => {
+      for (const asset of [...(parser.json.buffers || []), ...(parser.json.images || [])]) {
+        if (typeof asset.uri === 'string' && /^blob:/i.test(asset.uri)) {
+          throw new Error('External blob references are unavailable.');
+        }
+      }
+      return { name: 'DropPodAssetPolicy' };
+    });
+    const model = await loader.parseAsync(buffer || text, '');
+    subject.add(model.scene);
+  } else if (isStl) {
+    const geometry = new STLLoader().parse(buffer);
+    subject.add(new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({
+      color: geometry.hasColors ? 0xffffff : 0xb7c9db,
+      vertexColors: Boolean(geometry.hasColors),
+      side: THREE.DoubleSide,
+    })));
   } else if (isObj) {
     const loader = new OBJLoader(manager);
     if (materials) {
@@ -122,7 +157,7 @@ export function createModelPreview({ text, buffer, name, files = [], materials =
   if (missing.size) {
     const warning = document.createElement('p');
     warning.className = 'model-warning';
-    warning.textContent = `Texture not found in this folder: ${[...missing].join(', ')}. Add it to see the model's albedo texture.`;
+    warning.textContent = 'Model textures missing from this folder: ' + [...missing].join(', ');
     container.insertBefore(warning, hint);
   }
   const box = new THREE.Box3().setFromObject(subject);

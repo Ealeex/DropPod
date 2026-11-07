@@ -1,113 +1,149 @@
-import { getDocument, GlobalWorkerOptions } from '/vendor/pdf/build/pdf.min.mjs';
+import { AnnotationMode, getDocument, GlobalWorkerOptions } from '/vendor/pdf/build/pdf.min.mjs';
+import { EventBus, FindState, PDFFindController, PDFLinkService, PDFSinglePageViewer } from '/vendor/pdf/web/pdf_viewer.mjs';
 
 GlobalWorkerOptions.workerSrc = '/vendor/pdf/build/pdf.worker.min.mjs';
 
-export function createPdfPreview(host, url) {
-  const viewer = document.createElement('div');
-  viewer.className = 'pdf-preview';
+function control(label, onClick) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'text-button';
+  button.textContent = label;
+  button.addEventListener('click', onClick);
+  return button;
+}
+
+export function createPdfPreview(host, source) {
+  const view = document.createElement('div');
+  view.className = 'pdf-preview';
   const toolbar = document.createElement('div');
   toolbar.className = 'pdf-toolbar';
-  const previous = document.createElement('button');
-  previous.type = 'button';
-  previous.className = 'text-button';
-  previous.textContent = 'Previous';
-  const next = document.createElement('button');
-  next.type = 'button';
-  next.className = 'text-button';
-  next.textContent = 'Next';
   const status = document.createElement('span');
   status.className = 'meta';
   status.setAttribute('role', 'status');
   status.textContent = 'Loading PDF…';
-  previous.disabled = next.disabled = true;
-  toolbar.append(previous, status, next);
+  const page = document.createElement('input');
+  page.type = 'number';
+  page.min = 1;
+  page.setAttribute('aria-label', 'Page number');
+  const previous = control('Previous', () => viewer.previousPage());
+  const next = control('Next', () => viewer.nextPage());
+  const zoomOut = control('−', () => viewer.decreaseScale());
+  zoomOut.setAttribute('aria-label', 'Zoom out');
+  const zoomIn = control('+', () => viewer.increaseScale());
+  zoomIn.setAttribute('aria-label', 'Zoom in');
+  const fit = control('Fit width', () => { viewer.currentScaleValue = 'page-width'; });
+  toolbar.append(previous, page, next, status, zoomOut, zoomIn, fit);
+  const search = document.createElement('form');
+  search.className = 'pdf-toolbar';
+  const query = document.createElement('input');
+  query.type = 'search';
+  query.maxLength = 200;
+  query.placeholder = 'Find in document';
+  query.setAttribute('aria-label', 'Find in document');
+  const findPrevious = control('Previous match', () => find(true));
+  const findNext = control('Next match', () => find(false));
+  const matches = document.createElement('span');
+  matches.className = 'meta';
+  matches.setAttribute('role', 'status');
+  search.append(query, findPrevious, findNext, matches);
+  search.addEventListener('submit', (event) => {
+    event.preventDefault();
+    find(false);
+  });
+  const controls = [previous, next, page, zoomIn, zoomOut, fit, query, findPrevious, findNext];
+  controls.forEach((item) => { item.disabled = true; });
 
   const pageHost = document.createElement('div');
-  pageHost.className = 'pdf-page';
-  viewer.append(toolbar, pageHost);
-  host.replaceChildren(viewer);
+  pageHost.className = 'pdf-page-host';
+  const container = document.createElement('div');
+  container.className = 'pdf-page';
+  const pages = document.createElement('div');
+  pages.className = 'pdfViewer';
+  container.append(pages);
+  pageHost.append(container);
+  view.append(toolbar, search, pageHost);
+  host.replaceChildren(view);
 
+  const lifetime = new AbortController();
+  const { signal } = lifetime;
+  const eventBus = new EventBus();
+  const linkService = new PDFLinkService({ eventBus });
+  const findController = new PDFFindController({ eventBus, linkService });
+  const viewer = new PDFSinglePageViewer({
+    container, viewer: pages, eventBus, linkService, findController, abortSignal: signal,
+    annotationMode: AnnotationMode.DISABLE, maxCanvasPixels: 4096 ** 2,
+    enableAutoLinking: false,
+  });
+  linkService.setViewer(viewer);
   const loading = getDocument({
-    url,
+    ...(typeof source === 'string' ? { url: source } : { data: source }),
     cMapUrl: '/vendor/pdf/cmaps/',
     iccUrl: '/vendor/pdf/iccs/',
     standardFontDataUrl: '/vendor/pdf/standard_fonts/',
     wasmUrl: '/vendor/pdf/wasm/',
     useWasm: false,
+    isEvalSupported: false,
   });
-  let pdf;
-  let pageNumber = 1;
-  let renderTask;
-  let version = 0;
-  let disposed = false;
-  let lastWidth = 0;
-  let resizeTimer;
 
-  async function drawPage() {
-    if (disposed || !pdf) return;
-    const current = ++version;
-    const number = pageNumber;
-    renderTask?.cancel();
-    previous.disabled = number === 1;
-    next.disabled = number === pdf.numPages;
-    status.textContent = `Page ${number} of ${pdf.numPages}`;
-    try {
-      const page = await pdf.getPage(number);
-      if (disposed || version !== current) return;
-      const unscaled = page.getViewport({ scale: 1 });
-      const width = Math.max(pageHost.clientWidth - 16, 1);
-      const displayScale = width / unscaled.width;
-      const resolution = Math.min(
-        displayScale * Math.min(devicePixelRatio || 1, 2),
-        4096 / Math.max(unscaled.width, unscaled.height),
-      );
-      const viewport = page.getViewport({ scale: resolution });
-      const canvas = document.createElement('canvas');
-      canvas.width = Math.max(1, Math.ceil(viewport.width));
-      canvas.height = Math.max(1, Math.ceil(viewport.height));
-      canvas.style.width = `${width}px`;
-      canvas.setAttribute('role', 'img');
-      canvas.setAttribute('aria-label', `PDF page ${number}`);
-      renderTask = page.render({ canvas, viewport });
-      await renderTask.promise;
-      if (!disposed && version === current) pageHost.replaceChildren(canvas);
-    } catch {
-      if (!disposed && version === current) {
-        pageHost.replaceChildren();
-        status.textContent = `Page ${number} could not be rendered.`;
-      }
-    }
+  let lastQuery;
+  function find(backwards) {
+    const value = query.value.trim();
+    eventBus.dispatch('find', {
+      source: search, query: value, type: value && value === lastQuery ? 'again' : '',
+      highlightAll: true, findPrevious: backwards,
+    });
+    lastQuery = value;
+    if (!value) matches.textContent = '';
   }
 
-  function turnPage(offset) {
-    pageNumber += offset;
-    pageHost.scrollTop = 0;
-    drawPage();
-  }
-  previous.addEventListener('click', () => turnPage(-1));
-  next.addEventListener('click', () => turnPage(1));
-
-  const observer = new ResizeObserver(() => {
-    const width = pageHost.clientWidth;
-    if (width === lastWidth) return;
-    lastWidth = width;
-    clearTimeout(resizeTimer);
-    resizeTimer = setTimeout(drawPage, 120);
+  query.addEventListener('input', () => {
+    if (!query.value) find(false);
   });
-  observer.observe(pageHost);
-  loading.promise.then((document) => {
-    if (disposed) return;
-    pdf = document;
-    drawPage();
+
+  function updatePage() {
+    const current = viewer.currentPageNumber;
+    page.value = current;
+    status.textContent = 'of ' + viewer.pagesCount;
+    previous.disabled = current <= 1;
+    next.disabled = current >= viewer.pagesCount;
+  }
+
+  page.addEventListener('change', () => {
+    viewer.currentPageNumber = Math.max(1, Math.min(viewer.pagesCount, Math.trunc(page.valueAsNumber) || viewer.currentPageNumber));
+    updatePage();
+  });
+
+  eventBus.on('pagesinit', () => {
+    viewer.currentScaleValue = 'page-width';
+    page.max = viewer.pagesCount;
+    controls.forEach((item) => { item.disabled = false; });
+    updatePage();
+  }, { signal });
+  eventBus.on('pagechanging', updatePage, { signal });
+
+  function showMatches({ current, total }) {
+    if (lastQuery && total) matches.textContent = current + ' of ' + total + ' matches';
+  }
+  eventBus.on('updatefindmatchescount', ({ matchesCount }) => showMatches(matchesCount), { signal });
+  eventBus.on('updatefindcontrolstate', ({ state, matchesCount }) => {
+    if (!query.value.trim()) return;
+    if (state === FindState.NOT_FOUND) matches.textContent = 'No matches';
+    else if (state === FindState.PENDING) matches.textContent = 'Searching…';
+    else showMatches(matchesCount);
+  }, { signal });
+
+  loading.promise.then((pdf) => {
+    if (signal.aborted) return;
+    linkService.setDocument(pdf);
+    viewer.setDocument(pdf);
   }).catch(() => {
-    if (!disposed) status.textContent = 'The PDF could not be opened.';
+    if (!signal.aborted) status.textContent = 'The PDF could not be opened.';
   });
 
   return () => {
-    disposed = true;
-    clearTimeout(resizeTimer);
-    observer.disconnect();
-    renderTask?.cancel();
+    lifetime.abort();
+    viewer.setDocument(null);
+    linkService.setDocument(null);
     loading.destroy().catch(() => {});
   };
 }

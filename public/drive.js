@@ -28,6 +28,9 @@ const pageError = $('#page-error');
 const previewPanel = $('#preview-panel');
 const previewBody = $('#preview-content');
 const previewResize = $('#preview-resize');
+const previewPrevious = $('#previous-preview');
+const previewNext = $('#next-preview');
+const previewExpand = $('#expand-preview');
 const contextMenu = $('#context-menu');
 let menuTrigger = null;
 
@@ -497,8 +500,10 @@ async function copyShareLink(item) {
 function closePreview({ restoreFocus = false } = {}) {
   const preview = state.preview;
   if (!preview) return;
+  preview.controller.abort();
   preview.dispose?.();
   state.preview = null;
+  setPreviewExpanded(false);
   preview.trigger.setAttribute('aria-expanded', 'false');
   if (restoreFocus && preview.trigger.isConnected) preview.trigger.focus();
   previewPanel.classList.remove('is-open');
@@ -523,6 +528,32 @@ function renderTextPreview(host, text, item) {
   host.replaceChildren(pre);
   if (item.previewTruncated) host.append(archiveMessage('Showing the first 128 KB.'));
   if (item.language) colorizeCode(code, item.language);
+  if (!/\.(?:md|csv|tsv)$/i.test(item.name)) return;
+  const markdown = /\.md$/i.test(item.name);
+  const view = document.createElement('div');
+  pre.replaceWith(view);
+  view.append(pre);
+  const tools = document.createElement('div');
+  tools.className = 'preview-tools';
+  const toggle = makeButton('Source', showSource, 'text-button');
+  tools.append(toggle);
+  host.prepend(tools);
+  let rich;
+  toggle.disabled = true;
+
+  function showSource() {
+    const showRich = view.firstChild === pre;
+    view.replaceChildren(showRich ? rich : pre);
+    toggle.textContent = showRich ? 'Source' : markdown ? 'Rendered' : 'Table';
+    if (!showRich && item.language) colorizeCode(code, item.language);
+  }
+
+  import('./workflow-preview.mjs').then(({ createRichText }) => createRichText(text, item.name)).then((result) => {
+    if (!view.isConnected) return;
+    rich = result;
+    view.replaceChildren(rich);
+    toggle.disabled = false;
+  }).catch(() => tools.remove());
 }
 
 async function colorizeCode(code, language) {
@@ -532,7 +563,7 @@ async function colorizeCode(code, language) {
       const { default: grammar } = await import(`/vendor/highlight/languages/${encodeURIComponent(language)}.min.js`);
       highlighter.registerLanguage(language, grammar);
     }
-    if (!code.isConnected) return;
+    if (!code.isConnected || code.dataset.highlighted) return;
     code.className = `language-${language}`;
     highlighter.highlightElement(code);
   } catch {
@@ -540,12 +571,12 @@ async function colorizeCode(code, language) {
   }
 }
 
-function openPdfPreview(host, url) {
+function openPdfPreview(host, source) {
   let dispose;
   let closed = false;
   host.replaceChildren(archiveMessage('Loading PDF…'));
   import('./pdf-preview.mjs').then(({ createPdfPreview }) => {
-    if (!closed) dispose = createPdfPreview(host, url);
+    if (!closed) dispose = createPdfPreview(host, source);
   }).catch(() => {
     if (!closed) host.replaceChildren(archiveMessage('The PDF preview could not be opened.'));
   });
@@ -752,17 +783,32 @@ function createArchiveBrowser(item, entries, preview) {
     }
 
     const media = document.createElement(entry.preview === 'image' ? 'img' : entry.preview);
-    if (media instanceof HTMLImageElement) media.alt = entry.name;
-    else {
+    let entryPreview = media;
+    if (media instanceof HTMLImageElement) {
+      media.alt = entry.name;
+      try {
+        const { createImagePreview } = await import('./workflow-preview.mjs');
+        if (version !== requestVersion) return;
+        const image = createImagePreview(media);
+        disposeEntry = image.dispose;
+        entryPreview = image.element;
+      } catch {
+        if (version !== requestVersion) return;
+      }
+    } else {
       media.controls = true;
       media.preload = 'metadata';
       media.setAttribute('aria-label', entry.name);
     }
     media.addEventListener('error', () => {
-      if (version === requestVersion) wrapper.replaceChildren(archiveMessage('Preview unavailable for this entry.'));
+      if (version === requestVersion) {
+        disposeEntry?.();
+        disposeEntry = null;
+        wrapper.replaceChildren(archiveMessage('Preview unavailable for this entry.'));
+      }
     });
     media.src = url;
-    wrapper.replaceChildren(media);
+    wrapper.replaceChildren(entryPreview);
   }
 
   renderFolder();
@@ -805,22 +851,22 @@ async function openArchivePreview(item, preview) {
 async function openModelPreview(item, preview) {
   previewMessage('Loading 3D model…');
   const url = `/api/drive/files/${encodeURIComponent(item.id)}/preview`;
-  const isFbx = /\.fbx$/i.test(item.name);
+  const binary = /\.(?:fbx|glb|stl)$/i.test(item.name);
   try {
-    const response = await fetch(url);
+    const response = await fetch(url, { signal: preview.controller.signal });
     if (!response.ok) {
       if (await handlePreviewAuth(response)) return;
       throw new Error('Preview unavailable.');
     }
-    const data = isFbx ? await response.arrayBuffer() : await response.text();
+    const data = binary ? await response.arrayBuffer() : await response.text();
     if (state.preview !== preview) return;
     const { createModelPreview, loadObjMaterials } = await import('./model-viewer.mjs');
     if (state.preview !== preview) return;
     const files = state.folder?.items?.filter((sibling) => sibling.kind === 'file') || [];
     const materials = /\.obj$/i.test(item.name) ? await loadObjMaterials(data, files) : '';
     if (state.preview !== preview) return;
-    const model = isFbx ? { buffer: data } : { text: data };
-    const viewer = createModelPreview({ ...model, name: item.name, files, materials });
+    const model = binary ? { buffer: data } : { text: data };
+    const viewer = await createModelPreview({ ...model, name: item.name, files, materials });
     if (state.preview !== preview) {
       viewer.dispose();
       return;
@@ -829,15 +875,74 @@ async function openModelPreview(item, preview) {
     previewBody.classList.add('model-mode');
     previewBody.replaceChildren(viewer.element);
   } catch (error) {
+    if (state.preview !== preview) return;
     console.error(error);
-    if (state.preview === preview) previewMessage('Preview unavailable. The model could not be rendered.');
+    previewMessage('Preview unavailable. The model could not be rendered.');
+  }
+}
+
+function setPreviewExpanded(expanded) {
+  previewPanel.classList.toggle('is-expanded', expanded);
+  previewExpand.setAttribute('aria-pressed', String(expanded));
+  previewExpand.textContent = expanded ? 'Restore drawer' : 'Full screen';
+  previewResize.tabIndex = expanded ? -1 : 0;
+}
+
+function previewNeighbors() {
+  const files = state.folder?.items.filter((item) => item.kind === 'file' && item.preview) || [];
+  const index = files.findIndex((item) => item.id === state.preview?.item.id);
+  return index < 0 ? [] : [files[index - 1], files[index + 1]];
+}
+
+function updatePreviewNavigation() {
+  const [previous, next] = previewNeighbors();
+  previewPrevious.disabled = !previous;
+  previewNext.disabled = !next;
+}
+
+function navigatePreview(direction) {
+  const item = previewNeighbors()[direction];
+  if (!item) return;
+  const row = $('#items').querySelector('[data-item-id="' + item.id + '"]');
+  const trigger = row?.querySelector('.preview-trigger');
+  if (!trigger) return;
+  const focus = document.activeElement;
+  openPreview(item, trigger, { focus: false });
+  if (focus.disabled) (direction ? previewPrevious : previewNext).focus();
+}
+
+async function openOfficePreview(item, preview, url) {
+  const spreadsheet = item.preview === 'spreadsheet';
+  previewMessage(spreadsheet ? 'Loading workbook…' : 'Preparing Office preview…');
+  try {
+    if (spreadsheet && item.size > 32 * 1024 * 1024) throw new Error('Workbook previews are limited to 32 MiB.');
+    const response = await fetch(url, { signal: preview.controller.signal });
+    if (await handlePreviewAuth(response) || state.preview !== preview) return;
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      throw new Error(data.error || 'This Office file could not be opened.');
+    }
+    const bytes = await response.arrayBuffer();
+    if (state.preview !== preview) return;
+    if (!spreadsheet) {
+      preview.dispose = openPdfPreview(previewBody, bytes);
+      return;
+    }
+    const { createSpreadsheet } = await import('./workflow-preview.mjs');
+    if (state.preview === preview) preview.dispose = createSpreadsheet(previewBody, bytes);
+  } catch (error) {
+    if (state.preview === preview) previewMessage(error.message);
   }
 }
 
 async function openPreview(item, trigger, { focus = true } = {}) {
+  const expanded = previewPanel.classList.contains('is-expanded');
   closePreview();
+  setPreviewExpanded(expanded);
   previewBody.className = 'preview-content';
-  const preview = { item, trigger };
+  previewBody.scrollTop = 0;
+  previewBody.scrollLeft = 0;
+  const preview = { item, trigger, controller: new AbortController() };
   state.preview = preview;
   trigger.setAttribute('aria-expanded', 'true');
   $('#preview-name').textContent = item.name;
@@ -849,6 +954,7 @@ async function openPreview(item, trigger, { focus = true } = {}) {
   previewPanel.inert = false;
   previewPanel.removeAttribute('aria-hidden');
   previewPanel.classList.add('is-open');
+  updatePreviewNavigation();
   if (focus) $('#close-preview').focus();
 
   const url = `/api/drive/files/${encodeURIComponent(item.id)}/preview`;
@@ -859,6 +965,9 @@ async function openPreview(item, trigger, { focus = true } = {}) {
   if (item.preview === 'model') {
     openModelPreview(item, preview);
     return;
+  }
+  if (item.preview === 'office' || item.preview === 'spreadsheet') {
+    return openOfficePreview(item, preview, url);
   }
   if (item.preview === 'pdf') {
     preview.dispose = openPdfPreview(previewBody, url);
@@ -887,8 +996,19 @@ async function openPreview(item, trigger, { focus = true } = {}) {
   }
   if (['image', 'audio', 'video'].includes(item.preview)) {
     const media = document.createElement(item.preview === 'image' ? 'img' : item.preview);
-    if (media instanceof HTMLImageElement) media.alt = item.name;
-    else {
+    let wrapper = media;
+    if (media instanceof HTMLImageElement) {
+      media.alt = item.name;
+      try {
+        const { createImagePreview } = await import('./workflow-preview.mjs');
+        if (state.preview !== preview) return;
+        const image = createImagePreview(media);
+        wrapper = image.element;
+        preview.dispose = image.dispose;
+      } catch {
+        if (state.preview !== preview) return;
+      }
+    } else {
       media.controls = true;
       media.preload = 'metadata';
       media.setAttribute('aria-label', item.name);
@@ -909,9 +1029,11 @@ async function openPreview(item, trigger, { focus = true } = {}) {
         media.src = `${url}?compatible=1`;
         return;
       }
+      preview.dispose?.();
+      preview.dispose = null;
       previewMessage('Preview unavailable. Download the file to open it.');
     });
-    previewBody.replaceChildren(media);
+    previewBody.replaceChildren(wrapper);
     if (converted) showConversion();
     media.src = url;
     return;
@@ -1111,6 +1233,7 @@ function renderItems(items, parent) {
   if (focused.isConnected && document.activeElement !== focused && !dialog.open) focused.focus({ preventScroll: true });
   if (menuTrigger && !menuTrigger.isConnected) closeContextMenu();
   const preview = state.preview;
+  if (preview) updatePreviewNavigation();
   if (preview && !preview.trigger.isConnected) {
     const index = items.findIndex((item) => item.id === preview.item.id);
     if (index < 0) closePreview();
@@ -1904,6 +2027,9 @@ $('#ip-change-back').addEventListener('click', async () => {
   }
 });
 $('#close-dialog').addEventListener('click', () => dialog.close());
+previewPrevious.addEventListener('click', () => navigatePreview(0));
+previewNext.addEventListener('click', () => navigatePreview(1));
+previewExpand.addEventListener('click', () => setPreviewExpanded(!previewPanel.classList.contains('is-expanded')));
 $('#close-preview').addEventListener('click', () => closePreview({ restoreFocus: true }));
 document.addEventListener('click', (event) => {
   if (state.preview && !previewPanel.contains(event.target)) closePreview();
@@ -1927,7 +2053,12 @@ document.addEventListener('keydown', (event) => {
     closeContextMenu({ restoreFocus: true });
     return;
   }
-  if (event.key === 'Escape' && state.preview && !dialog.open) closePreview({ restoreFocus: true });
+  if (event.key === 'Escape' && state.preview && !dialog.open) {
+    if (previewPanel.classList.contains('is-expanded')) {
+      setPreviewExpanded(false);
+      previewExpand.focus();
+    } else closePreview({ restoreFocus: true });
+  }
 });
 document.addEventListener('pointerdown', (event) => {
   if (!contextMenu.contains(event.target)) closeContextMenu();

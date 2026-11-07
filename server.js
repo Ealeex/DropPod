@@ -37,7 +37,7 @@ if (authMode === 'passphrase' && !passphrase) {
 }
 
 const contentSecurityPolicy = (() => {
-  const base = "default-src 'self'; img-src 'self' blob: data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'";
+  const base = "default-src 'self'; img-src 'self' blob: data:; connect-src 'self' blob: data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'";
   try {
     const html = readFileSync(driveHtml, 'utf8').replace(/\r\n?/g, '\n');
     const importMap = html.match(/<script type="importmap">([\s\S]*?)<\/script>/)?.[1];
@@ -103,8 +103,15 @@ app.get('/config.js', (req, res) => {
 app.get('/', (req, res) => res.sendFile(driveHtml));
 app.use('/vendor/three', express.static(path.join(__dirname, 'node_modules', 'three'), { maxAge: '1h' }));
 const pdfAssets = path.join(__dirname, 'node_modules', 'pdfjs-dist');
-for (const directory of ['build', 'cmaps', 'iccs', 'standard_fonts', 'wasm']) {
+for (const directory of ['build', 'cmaps', 'iccs', 'standard_fonts', 'wasm', 'web']) {
   app.use(`/vendor/pdf/${directory}`, express.static(path.join(pdfAssets, directory), { maxAge: '1h' }));
+}
+for (const [route, asset] of Object.entries({
+  'markdown-it.mjs': 'markdown-it/dist/browser/markdown-it.esm.min.mjs',
+  'papaparse.js': 'papaparse/papaparse.min.js',
+  'xlsx.mjs': 'xlsx/xlsx.mjs',
+})) {
+  app.get('/vendor/preview/' + route, (req, res) => res.sendFile(path.join(__dirname, 'node_modules', asset), { maxAge: '1h' }));
 }
 app.use('/vendor/highlight', express.static(path.join(__dirname, 'node_modules', '@highlightjs', 'cdn-assets', 'es'), { maxAge: '1h' }));
 app.use(express.static(path.join(__dirname, 'public')));

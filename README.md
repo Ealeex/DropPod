@@ -23,9 +23,13 @@ Use **Download** on a file or folder. FireSend packs folders into ZIP files with
 
 Use **Copy share link** on a file or folder to create a direct download link. Anyone who can reach the FireSend server and has the link can download without signing in. To share with another device, open FireSend using the host's network address before copying the link. Folder links download a ZIP of the folder's current contents, and deleting the shared item disables its links.
 
-Images, audio, video, text, and PDFs can be previewed. Source files such as JavaScript, Python, and TypeScript get syntax coloring, and multi-page PDFs have page navigation. COLLADA (`.dae`), Wavefront (`.obj`), and FBX (`.fbx`) models open in a rotatable 3D view. FBX models can use embedded textures. Keep external textures and any OBJ material files (`.mtl`) in the same drive folder. `.zip` and `.7z` archives open as a browsable file list, and previewable entries can be opened from there.
+Images (including SVG), audio, video, text, and PDFs can be previewed. PDFs support zoom, jumping to a page, and finding or selecting embedded text. Source files get syntax coloring. Markdown renders with a source toggle, and CSV and TSV open as tables. Excel workbooks (`.xlsx`) open with worksheet tabs.
 
-Drag the left edge of the preview drawer to resize it, or click outside to close it. The drive list shows small image and video thumbnails. Video thumbnails use a frame 25% into the clip when its duration is available. FFmpeg generates these thumbnails and browser-compatible previews for uploaded formats such as MOV, MKV, AVI, FLAC, and TIFF. The first preview of a large file can take time to generate.
+Word (`.docx`) and PowerPoint (`.pptx`) use LibreOffice on the server to generate a read-only PDF preview. Install LibreOffice on the host and restart DropPod. Set `SOFFICE_PATH` in `.env` if it is installed in a custom location. Use `soffice.com` on Windows. Office previews are limited to 32 MiB per input file. Excel and delimited tables show up to 500 rows and 50 columns per sheet.
+
+COLLADA (`.dae`), Wavefront (`.obj`), FBX (`.fbx`), glTF (`.gltf`, `.glb`), and STL (`.stl`) open in a rotatable 3D view. Keep external textures, glTF buffers (`.bin`), and OBJ material files (`.mtl`) in the same drive folder. ZIP, 7Z, RAR, TAR, and TAR.GZ archives open as a browsable file list, and supported entries can be previewed from there. TAR.GZ previews are limited to 256 MiB of decompressed data.
+
+Drag the left edge of the drawer to resize it, click **Full screen** to fill the window, or use the arrows to browse the other previewable files in the folder. Click outside the drawer to close it. Image previews offer zoom, pan, and rotation. The drive list shows small image and video thumbnails. Video thumbnails use a frame 25% into the clip when its duration is available. FFmpeg generates browser-compatible previews for uploaded formats such as MOV, MKV, AVI, FLAC, and TIFF. The first preview of a large file can take time to generate.
 
 ### Host tools
 
