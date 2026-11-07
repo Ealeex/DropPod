@@ -91,6 +91,11 @@ app.get('/config.js', (req, res) => {
 });
 app.get('/', (req, res) => res.sendFile(driveHtml));
 app.use('/vendor/three', express.static(path.join(__dirname, 'node_modules', 'three'), { maxAge: '1h' }));
+const pdfAssets = path.join(__dirname, 'node_modules', 'pdfjs-dist');
+for (const directory of ['build', 'cmaps', 'iccs', 'standard_fonts', 'wasm']) {
+  app.use(`/vendor/pdf/${directory}`, express.static(path.join(pdfAssets, directory), { maxAge: '1h' }));
+}
+app.use('/vendor/highlight', express.static(path.join(__dirname, 'node_modules', '@highlightjs', 'cdn-assets', 'es'), { maxAge: '1h' }));
 app.use(express.static(path.join(__dirname, 'public')));
 app.use('/api', (req, res) => res.status(404).json({ error: 'Not found.' }));
 

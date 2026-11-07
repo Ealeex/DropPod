@@ -1,8 +1,19 @@
 import * as THREE from 'three';
 import { ColladaLoader } from 'three/addons/loaders/ColladaLoader.js';
+import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
+import { MTLLoader } from 'three/addons/loaders/MTLLoader.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
 const blankTexture = '/blank.png';
+
+function referenceName(value) {
+  try {
+    const url = new URL(value.replaceAll('\\', '/'), location.href);
+    return decodeURIComponent(url.pathname.split('/').pop()).toLowerCase();
+  } catch {
+    return value.split(/[\\/]/).pop().toLowerCase();
+  }
+}
 
 function textureNames(text) {
   const document = new DOMParser().parseFromString(text, 'application/xml');
@@ -12,19 +23,32 @@ function textureNames(text) {
     for (const source of image.getElementsByTagName('init_from')) {
       const value = source.textContent.trim();
       if (!value || value.startsWith('data:')) continue;
-      let name = value;
-      try {
-        name = decodeURIComponent(new URL(value, location.href).pathname.split('/').pop() || value);
-      } catch {
-        name = value.split(/[\\/]/).pop() || value;
-      }
-      if (name) names.add(name.toLowerCase());
+      const name = referenceName(value);
+      if (name) names.add(name);
     }
   }
   return [...names];
 }
 
-export function createModelPreview({ text, name, files = [] }) {
+export async function loadObjMaterials(text, files) {
+  const siblings = new Map(files.filter((file) => /\.mtl$/i.test(file.name)).map((file) => [file.name.toLowerCase(), file]));
+  const libraries = new Set();
+  for (const match of text.matchAll(/^\s*mtllib[ \t]+([^\r\n]+)$/gm)) {
+    const reference = match[1].trim();
+    const references = siblings.has(referenceName(reference)) ? [reference] : reference.split(/\s+/);
+    for (const name of references) {
+      const file = siblings.get(referenceName(name));
+      if (file) libraries.add(file.id);
+    }
+  }
+  const materials = await Promise.all([...libraries].map(async (id) => {
+    const response = await fetch(`/api/drive/files/${encodeURIComponent(id)}/preview`);
+    return response.ok ? response.text() : '';
+  }));
+  return materials.join('\n');
+}
+
+export function createModelPreview({ text, name, files = [], materials = '' }) {
   const container = document.createElement('div');
   container.className = 'model-viewer';
   container.setAttribute('role', 'img');
@@ -40,13 +64,8 @@ export function createModelPreview({ text, name, files = [] }) {
     textureUrls.set(file.name.toLowerCase(), `/api/drive/files/${encodeURIComponent(file.id)}/preview`);
   }
 
-  const missing = textureNames(text).filter((reference) => !textureUrls.has(reference));
-  if (missing.length) {
-    const warning = document.createElement('p');
-    warning.className = 'model-warning';
-    warning.textContent = `Texture not found in this folder: ${missing.join(', ')}. Add it to see the model's albedo texture.`;
-    container.append(warning);
-  }
+  const isObj = /\.obj$/i.test(name);
+  const missing = new Set(isObj ? [] : textureNames(text).filter((reference) => !textureUrls.has(reference)));
 
   const hint = document.createElement('p');
   hint.className = 'model-hint';
@@ -56,18 +75,36 @@ export function createModelPreview({ text, name, files = [] }) {
   const manager = new THREE.LoadingManager();
   manager.setURLModifier((url) => {
     if (url.startsWith('data:') || url.startsWith('blob:')) return blankTexture;
-    let fileName = url;
-    try {
-      fileName = decodeURIComponent(new URL(url, location.href).pathname.split('/').pop() || url);
-    } catch {
-      fileName = url.split(/[\\/]/).pop() || url;
-    }
-    return textureUrls.get(fileName.toLowerCase()) || blankTexture;
+    const fileName = referenceName(url);
+    const texture = textureUrls.get(fileName);
+    if (!texture && isObj && fileName) missing.add(fileName);
+    return texture || blankTexture;
   });
 
-  const loader = new ColladaLoader(manager);
   const subject = new THREE.Group();
-  subject.add(loader.parse(text, '').scene);
+  if (isObj) {
+    const loader = new OBJLoader(manager);
+    if (materials) {
+      const creator = new MTLLoader(manager).parse(materials, '');
+      loader.setMaterials({
+        create(material) {
+          if (Object.hasOwn(creator.materialsInfo, material) && !Object.hasOwn(Object.prototype, material)) {
+            return creator.create(material);
+          }
+          return undefined;
+        },
+      });
+    }
+    subject.add(loader.parse(text));
+  } else {
+    subject.add(new ColladaLoader(manager).parse(text, '').scene);
+  }
+  if (missing.size) {
+    const warning = document.createElement('p');
+    warning.className = 'model-warning';
+    warning.textContent = `Texture not found in this folder: ${[...missing].join(', ')}. Add it to see the model's albedo texture.`;
+    container.insertBefore(warning, hint);
+  }
   const box = new THREE.Box3().setFromObject(subject);
   const sphere = box.getBoundingSphere(new THREE.Sphere());
   if (!Number.isFinite(sphere.radius) || sphere.radius <= 0) {
@@ -153,7 +190,9 @@ export function createModelPreview({ text, name, files = [] }) {
         const materials = Array.isArray(object.material) ? object.material : [object.material];
         for (const material of materials) {
           if (!material) continue;
-          material.map?.dispose();
+          for (const value of Object.values(material)) {
+            if (value?.isTexture) value.dispose();
+          }
           material.dispose();
         }
       });

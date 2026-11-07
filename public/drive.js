@@ -19,7 +19,7 @@ const state = {
   account: null, folder: null, version: 0, uploading: false, accountReady: false,
   loading: false, preview: null, authMode: config.authMode || 'account',
   passphraseRequired: false, passphraseUnlocked: false,
-  ipRegistered: false, ipName: null, renameSplit: loadRenameSplit(),
+  ipRegistered: false, ipName: null, ipAddress: null, ipMustChange: false, renameSplit: loadRenameSplit(),
 };
 const dialog = $('#dialog');
 const dialogBody = $('#dialog-body');
@@ -115,7 +115,7 @@ function renderAccount() {
   badge.className = 'account-name';
   badge.textContent = state.account.username;
   controls.replaceChildren(badge);
-  if (state.authMode === 'account' && state.account.role === 'admin') {
+  if (state.account.role === 'admin') {
     const button = makeButton('Admin panel', openAdmin);
     button.insertAdjacentHTML('afterbegin', icon('shield'));
     controls.append(button);
@@ -189,17 +189,24 @@ function showIpScreen(message = '') {
   $('#account-controls').replaceChildren();
   closeContextMenu();
   closePreview();
+  if (dialog.open) dialog.close();
   const registered = state.ipRegistered;
-  $('#ip-title').textContent = registered ? `Welcome back${state.ipName ? ', ' + state.ipName : ''}` : 'Set up this network';
-  $('#ip-copy').textContent = registered
-    ? 'Enter this network’s passphrase to open the shared drive.'
-    : 'Choose a friendly name and a passphrase for this network address.';
-  $('#ip-register-form').hidden = registered;
-  $('#ip-login-form').hidden = !registered;
+  const mustChange = state.ipMustChange;
+  $('#ip-title').textContent = mustChange ? 'Change your temporary passphrase'
+    : registered ? `Welcome back${state.ipName ? ', ' + state.ipName : ''}` : 'Set up this network';
+  $('#ip-copy').textContent = mustChange ? 'An administrator reset your passphrase. Choose a new one to open the drive.'
+    : registered ? 'Enter this network’s passphrase to open the shared drive.'
+      : 'Choose a friendly name and a passphrase for this network address.';
+  $('#ip-address strong').textContent = state.ipAddress || '';
+  $('#ip-address').hidden = !state.ipAddress;
+  $('#ip-register-form').hidden = registered || mustChange;
+  $('#ip-login-form').hidden = !registered || mustChange;
+  $('#ip-change-form').hidden = !mustChange;
   $('#ip-register-form').reset();
   $('#ip-login-form').reset();
+  $('#ip-change-form').reset();
   showError($('#ip-error'), message);
-  (registered ? $('#ip-login-passphrase') : $('#ip-name-input')).focus();
+  (mustChange ? $('#ip-change-form input') : registered ? $('#ip-login-passphrase') : $('#ip-name-input')).focus();
 }
 
 async function loadSession() {
@@ -209,11 +216,13 @@ async function loadSession() {
   state.passphraseUnlocked = session.passphraseUnlocked !== false;
   state.ipRegistered = session.ipRegistered === true;
   state.ipName = session.ipName || null;
+  state.ipAddress = session.ipAddress || null;
+  state.ipMustChange = session.ipMustChange === true;
   if (state.authMode === 'passphrase' && !state.passphraseUnlocked) {
     showPassphraseScreen();
     return;
   }
-  if (state.authMode === 'ip' && !session.ipUnlocked) {
+  if (state.authMode === 'ip' && (state.ipMustChange || !session.ipUnlocked)) {
     showIpScreen();
     return;
   }
@@ -221,7 +230,9 @@ async function loadSession() {
   $('#ip-screen').hidden = true;
   const account = state.authMode === 'account'
     ? session.account
-    : { ...guestAccount, username: state.authMode === 'ip' ? (state.ipName || 'Guest') : 'Shared drive' };
+    : state.authMode === 'ip'
+      ? { ...guestAccount, id: state.ipAddress, username: state.ipName || 'Guest', role: session.ipRole || 'member' }
+      : { ...guestAccount, username: 'Shared drive' };
   setAccount(account);
 }
 
@@ -295,6 +306,30 @@ async function submitIpLogin(event) {
   }
 }
 
+function changePassword(form) {
+  const currentPassword = form.elements.currentPassword.value;
+  const newPassword = form.elements.newPassword.value;
+  if (newPassword !== form.elements.confirmPassword.value) throw new Error('The new entries do not match.');
+  return request('/password', { method: 'POST', body: { currentPassword, newPassword } });
+}
+
+async function submitIpPasswordChange(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const button = form.querySelector('button[type="submit"]');
+  showError($('#ip-error'));
+  button.disabled = true;
+  try {
+    await changePassword(form);
+    await loadSession();
+    notice('Passphrase updated.');
+  } catch (error) {
+    showError($('#ip-error'), error.message);
+  } finally {
+    button.disabled = false;
+  }
+}
+
 function action(label, glyph, callback) {
   const button = makeButton('', callback, 'icon-button');
   button.innerHTML = icon(glyph);
@@ -333,6 +368,46 @@ function previewMessage(message) {
   text.className = 'preview-message';
   text.textContent = message;
   previewBody.replaceChildren(text);
+}
+
+function renderTextPreview(host, text, item) {
+  const pre = document.createElement('pre');
+  const code = document.createElement('code');
+  code.textContent = text;
+  pre.append(code);
+  host.replaceChildren(pre);
+  if (item.previewTruncated) host.append(archiveMessage('Showing the first 128 KB.'));
+  if (item.language) colorizeCode(code, item.language);
+}
+
+async function colorizeCode(code, language) {
+  try {
+    const { default: highlighter } = await import('/vendor/highlight/highlight.min.js');
+    if (!highlighter.getLanguage(language)) {
+      const { default: grammar } = await import(`/vendor/highlight/languages/${encodeURIComponent(language)}.min.js`);
+      highlighter.registerLanguage(language, grammar);
+    }
+    if (!code.isConnected) return;
+    code.className = `language-${language}`;
+    highlighter.highlightElement(code);
+  } catch {
+    // Keep the plain text readable when a highlighting module cannot load.
+  }
+}
+
+function openPdfPreview(host, url) {
+  let dispose;
+  let closed = false;
+  host.replaceChildren(archiveMessage('Loading PDF…'));
+  import('./pdf-preview.mjs').then(({ createPdfPreview }) => {
+    if (!closed) dispose = createPdfPreview(host, url);
+  }).catch(() => {
+    if (!closed) host.replaceChildren(archiveMessage('The PDF preview could not be opened.'));
+  });
+  return () => {
+    closed = true;
+    dispose?.();
+  };
 }
 
 const previewWidthKey = 'firesend:preview-width';
@@ -435,6 +510,7 @@ function createArchiveBrowser(item, entries, preview) {
   let path = [];
   let node = root;
   let requestVersion = 0;
+  let disposeEntry;
 
   function showToolbar(back, label) {
     toolbar.replaceChildren();
@@ -454,6 +530,8 @@ function createArchiveBrowser(item, entries, preview) {
 
   function renderFolder() {
     requestVersion += 1;
+    disposeEntry?.();
+    disposeEntry = null;
     showToolbar(path.length ? () => goTo(path.slice(0, -1)) : null, `/${path.join('/')}`);
     const folders = [...node.folders.entries()].sort(([a], [b]) => a.localeCompare(b));
     const files = [...node.files].sort((a, b) => a.name.localeCompare(b.name));
@@ -493,6 +571,8 @@ function createArchiveBrowser(item, entries, preview) {
 
   async function openEntry(entry) {
     const version = ++requestVersion;
+    disposeEntry?.();
+    disposeEntry = null;
     showToolbar(() => renderFolder(), `/${[...path, entry.name].join('/')}`);
     const wrapper = document.createElement('div');
     wrapper.className = 'archive-entry';
@@ -504,6 +584,10 @@ function createArchiveBrowser(item, entries, preview) {
     }
 
     const url = archiveEntryUrl(item, entry);
+    if (entry.preview === 'pdf') {
+      disposeEntry = openPdfPreview(wrapper, url);
+      return;
+    }
     if (entry.preview === 'text') {
       wrapper.append(archiveMessage('Loading…'));
       try {
@@ -515,10 +599,7 @@ function createArchiveBrowser(item, entries, preview) {
         }
         const text = await response.text();
         if (version !== requestVersion) return;
-        const pre = document.createElement('pre');
-        pre.textContent = text;
-        wrapper.replaceChildren(pre);
-        if (entry.previewTruncated) wrapper.append(archiveMessage('Showing the first 128 KB.'));
+        renderTextPreview(wrapper, text, entry);
       } catch {
         if (version === requestVersion) wrapper.replaceChildren(archiveMessage('Preview unavailable for this entry.'));
       }
@@ -545,6 +626,7 @@ function createArchiveBrowser(item, entries, preview) {
     element: container,
     dispose() {
       requestVersion += 1;
+      disposeEntry?.();
     },
   };
 }
@@ -586,10 +668,12 @@ async function openModelPreview(item, preview) {
     }
     const text = await response.text();
     if (state.preview !== preview) return;
-    const { createModelPreview } = await import('./model-viewer.mjs');
+    const { createModelPreview, loadObjMaterials } = await import('./model-viewer.mjs');
     if (state.preview !== preview) return;
     const files = state.folder?.items?.filter((sibling) => sibling.kind === 'file') || [];
-    const viewer = createModelPreview({ text, name: item.name, files });
+    const materials = /\.obj$/i.test(item.name) ? await loadObjMaterials(text, files) : '';
+    if (state.preview !== preview) return;
+    const viewer = createModelPreview({ text, name: item.name, files, materials });
     if (state.preview !== preview) {
       viewer.dispose();
       return;
@@ -629,6 +713,10 @@ async function openPreview(item, trigger, { focus = true } = {}) {
     openModelPreview(item, preview);
     return;
   }
+  if (item.preview === 'pdf') {
+    preview.dispose = openPdfPreview(previewBody, url);
+    return;
+  }
   if (item.preview === 'text') {
     previewMessage('Loading preview…');
     try {
@@ -644,15 +732,7 @@ async function openPreview(item, trigger, { focus = true } = {}) {
       }
       const text = await response.text();
       if (state.preview !== preview) return;
-      const content = document.createElement('pre');
-      content.textContent = text;
-      previewBody.replaceChildren(content);
-      if (item.previewTruncated) {
-        const note = document.createElement('p');
-        note.className = 'preview-message';
-        note.textContent = 'Showing the first 128 KB.';
-        previewBody.append(note);
-      }
+      renderTextPreview(previewBody, text, item);
     } catch (error) {
       if (state.preview === preview) previewMessage('Preview unavailable. Download the file to open it.');
     }
@@ -714,18 +794,31 @@ function renderItem(item) {
     button.setAttribute('aria-label', `Preview ${item.name}`);
     button.setAttribute('aria-controls', 'preview-panel');
     button.setAttribute('aria-expanded', 'false');
+    const iconSlot = name.firstElementChild;
+    button.prepend(iconSlot);
     name.append(button);
     if (item.preview === 'image' || item.preview === 'video') {
+      const fileUrl = `/api/drive/files/${encodeURIComponent(item.id)}`;
       const thumbnail = document.createElement('img');
       thumbnail.className = 'item-thumbnail';
       thumbnail.alt = '';
+      thumbnail.width = 30;
+      thumbnail.height = 30;
       thumbnail.draggable = false;
       thumbnail.loading = 'lazy';
       thumbnail.decoding = 'async';
-      thumbnail.addEventListener('load', () => name.classList.add('has-thumbnail'), { once: true });
-      thumbnail.addEventListener('error', () => thumbnail.remove(), { once: true });
-      button.append(thumbnail);
-      thumbnail.src = `/api/drive/files/${encodeURIComponent(item.id)}/thumbnail`;
+      thumbnail.addEventListener('load', () => iconSlot.classList.add('has-thumbnail'), { once: true });
+      let triedOriginal = false;
+      thumbnail.addEventListener('error', () => {
+        if (item.preview === 'image' && !triedOriginal) {
+          triedOriginal = true;
+          thumbnail.src = `${fileUrl}/preview`;
+          return;
+        }
+        thumbnail.remove();
+      });
+      iconSlot.append(thumbnail);
+      thumbnail.src = `${fileUrl}/thumbnail`;
     }
   }
   nameCell.append(name);
@@ -1322,6 +1415,8 @@ function applyTheme(theme) {
 }
 
 function openSettings() {
+  const credential = state.authMode === 'account' ? 'password'
+    : state.authMode === 'passphrase' ? 'shared passphrase' : 'passphrase';
   showDialog('Settings', `
     <fieldset class="theme-options">
       <legend>Theme</legend>
@@ -1346,6 +1441,10 @@ function openSettings() {
         <input type="radio" name="rename-mode" value="single">
         <span>Single name field<small class="hint">One box</small></span>
       </label>
+    </fieldset>
+    <fieldset class="theme-options">
+      <legend>Sign-in</legend>
+      <button id="change-password" class="button" type="button">Change ${credential}</button>
     </fieldset>`);
   const activeTheme = document.documentElement.dataset.theme;
   for (const input of dialogBody.querySelectorAll('input[name="drive-theme"]')) {
@@ -1372,11 +1471,68 @@ function openSettings() {
       }
     });
   }
+  $('#change-password').addEventListener('click', () => openPasswordSettings(credential));
   dialogBody.querySelector('input:checked').focus();
 }
 
+function openPasswordSettings(credential) {
+  const minimum = state.authMode === 'account' ? 10 : 6;
+  showDialog(`Change ${credential}`, `
+    <form class="dialog-form">
+      ${state.authMode === 'passphrase' ? '<p class="dialog-copy">This updates the passphrase for everyone and signs out other sessions.</p>' : ''}
+      <label>Current ${credential}<input name="currentPassword" type="password" autocomplete="current-password" required autofocus></label>
+      <label>New ${credential}<input name="newPassword" type="password" minlength="${minimum}" maxlength="128" autocomplete="new-password" required></label>
+      <label>Confirm new ${credential}<input name="confirmPassword" type="password" minlength="${minimum}" maxlength="128" autocomplete="new-password" required></label>
+      <div class="dialog-actions">
+        <button class="button cancel-dialog" type="button">Back</button>
+        <button class="button primary" type="submit">Save</button>
+      </div>
+    </form>`);
+  $('.cancel-dialog').addEventListener('click', openSettings);
+  submitForm(async (_, form) => {
+    await changePassword(form);
+    form.reset();
+    if (form.isConnected && dialog.open) dialog.close();
+    notice('Sign-in credentials updated.');
+  });
+}
+
+function editIpAccount(account, resetPassphrase) {
+  const title = resetPassphrase ? 'Set temporary passphrase' : 'Rename network account';
+  showDialog(title, `
+    <form class="dialog-form">
+      <p id="edit-ip-account" class="dialog-copy"></p>
+      ${resetPassphrase
+        ? '<label>Temporary passphrase<input name="value" type="password" minlength="6" maxlength="128" autocomplete="new-password" required autofocus></label>'
+        : '<label>Friendly name<input name="value" maxlength="40" required autofocus></label>'}
+      <div class="dialog-actions">
+        <button class="button cancel-dialog" type="button">Back</button>
+        <button class="button primary" type="submit">Save</button>
+      </div>
+    </form>`);
+  $('#edit-ip-account').textContent = resetPassphrase
+    ? `Give the temporary passphrase to ${account.username}. They’ll use it to sign in and choose a new one.`
+    : `Change the name shown for ${account.ip}.`;
+  if (!resetPassphrase) dialogBody.querySelector('input[name="value"]').value = account.username;
+  $('.cancel-dialog').addEventListener('click', openAdmin);
+  const url = `/admin/accounts/${encodeURIComponent(account.id)}`;
+  submitForm(async (formData, form) => {
+    const value = formData.get('value');
+    if (resetPassphrase) {
+      await request(`${url}/reset-passphrase`, { method: 'POST', body: { passphrase: value } });
+      form.reset();
+      notice('Temporary passphrase set.');
+    } else {
+      await request(url, { method: 'PATCH', body: { name: value } });
+      if (account.id === state.account?.id) await loadSession();
+    }
+    if (form.isConnected && dialog.open) openAdmin();
+  });
+}
+
 function openAdmin() {
-  if (state.authMode !== 'account' || state.account?.role !== 'admin') return;
+  if (state.account?.role !== 'admin') return;
+  const ipMode = state.authMode === 'ip';
   showDialog('Admin panel', `
     <p id="admin-summary" class="dialog-copy">Loading accounts…</p>
     <ul id="admin-list" class="admin-list"></ul>`);
@@ -1395,33 +1551,50 @@ function openAdmin() {
         name.textContent = account.username;
         const status = document.createElement('p');
         status.textContent = account.role === 'admin' ? 'Administrator' : account.disabled ? 'Disabled' : 'Member';
+        if (ipMode) {
+          status.textContent = [status.textContent, account.ip, account.resetRequired ? 'Passphrase change required' : '']
+            .filter(Boolean).join(' · ');
+        }
         profile.append(name, status);
         row.append(profile);
+        const actions = document.createElement('div');
+        actions.className = 'row-actions';
+        const url = `/admin/accounts/${encodeURIComponent(account.id)}`;
+        if (ipMode) {
+          const rename = makeButton('Rename', () => editIpAccount(account, false));
+          rename.setAttribute('aria-label', `Rename ${account.username}`);
+          actions.append(rename);
+        }
         if (account.role !== 'admin') {
-          const label = account.disabled ? 'Enable' : 'Disable';
-          const button = makeButton(label, async () => {
-            button.disabled = true;
-            showError(dialogError);
-            try {
-              await request(`/admin/accounts/${account.id}`, { method: 'PATCH', body: { disabled: !account.disabled } });
-              await refreshAdmin();
-            } catch (error) {
-              if (list.isConnected && dialog.open) showError(dialogError, error.message);
-            } finally {
-              button.disabled = false;
-            }
-          });
-          button.setAttribute('aria-label', `${label} ${account.username}`);
-          const actions = document.createElement('div');
-          actions.className = 'row-actions';
+          if (ipMode) {
+            const reset = makeButton('Reset passphrase', () => editIpAccount(account, true));
+            reset.setAttribute('aria-label', `Reset passphrase for ${account.username}`);
+            actions.append(reset);
+          } else {
+            const label = account.disabled ? 'Enable' : 'Disable';
+            const button = makeButton(label, async () => {
+              button.disabled = true;
+              showError(dialogError);
+              try {
+                await request(url, { method: 'PATCH', body: { disabled: !account.disabled } });
+                await refreshAdmin();
+              } catch (error) {
+                if (list.isConnected && dialog.open) showError(dialogError, error.message);
+              } finally {
+                button.disabled = false;
+              }
+            });
+            button.setAttribute('aria-label', `${label} ${account.username}`);
+            actions.append(button);
+          }
           const remove = action(`Delete ${account.username}`, 'trash', () => {
             confirmRemoval('Delete account', `Permanently delete the account “${account.username}”? Shared files will stay in the drive.`,
-              () => request(`/admin/accounts/${account.id}`, { method: 'DELETE' }),
+              () => request(url, { method: 'DELETE' }),
               (dialogStillOpen) => { if (dialogStillOpen) openAdmin(); }, openAdmin);
           });
-          actions.append(button, remove);
-          row.append(actions);
+          actions.append(remove);
         }
+        if (actions.childElementCount) row.append(actions);
         list.append(row);
       }
     } catch (error) {
@@ -1437,6 +1610,15 @@ function openAdmin() {
 $('#passphrase-form').addEventListener('submit', submitPassphrase);
 $('#ip-register-form').addEventListener('submit', submitIpRegister);
 $('#ip-login-form').addEventListener('submit', submitIpLogin);
+$('#ip-change-form').addEventListener('submit', submitIpPasswordChange);
+$('#ip-change-back').addEventListener('click', async () => {
+  try {
+    await request('/logout', { method: 'POST' });
+    await loadSession();
+  } catch (error) {
+    showError($('#ip-error'), error.message);
+  }
+});
 $('#close-dialog').addEventListener('click', () => dialog.close());
 $('#close-preview').addEventListener('click', () => closePreview({ restoreFocus: true }));
 document.addEventListener('click', (event) => {

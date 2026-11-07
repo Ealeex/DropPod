@@ -128,21 +128,18 @@ tbody tr:hover { background: rgb(255 255 255 / 3%); }
 tbody tr.is-drop-target { background: var(--accent-soft); outline: 1px solid var(--accent); outline-offset: -1px; }
 .item-name { display: flex; align-items: center; gap: 8px; overflow-wrap: anywhere; font-weight: 650; }
 .item-name a:hover { color: var(--accent); text-decoration: underline; }
-.item-icon { display: inline-grid; flex: none; place-items: center; width: 30px; height: 30px; border-radius: 5px; background: var(--well); color: var(--muted); }
-.item-thumbnail { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
-.item-name.has-thumbnail { align-items: flex-start; }
-.has-thumbnail .item-thumbnail {
-  position: static;
+.item-icon { display: inline-grid; flex: none; grid-template: 100% / 100%; place-items: center; width: 30px; height: 30px; border-radius: 5px; background: var(--well); color: var(--muted); }
+.item-icon > svg, .item-thumbnail { grid-area: 1 / 1; }
+.item-thumbnail {
   display: block;
-  width: 44px;
-  height: 30px;
-  margin-top: 4px;
-  border-radius: 4px;
-  background: var(--well);
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
   object-fit: cover;
-  opacity: 1;
-  pointer-events: auto;
+  opacity: 0;
 }
+.has-thumbnail > svg { visibility: hidden; }
+.has-thumbnail > .item-thumbnail { opacity: 1; }
 .folder-icon { color: var(--accent); background: var(--accent-soft); }
 .meta { color: var(--muted); font-size: .8rem; white-space: nowrap; }
 .owner-column { max-width: 18ch; overflow: hidden; }
@@ -186,6 +183,7 @@ progress { display: block; width: 100%; margin-top: 6px; accent-color: var(--acc
 .admin-list { margin-top: 12px; }
 .admin-list li { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 9px 0; border-top: 1px solid var(--border); overflow-wrap: anywhere; }
 .admin-list p { color: var(--muted); font-size: .8rem; }
+.admin-list .row-actions { flex-wrap: wrap; }
 .sr-only { position: absolute; width: 1px; height: 1px; clip-path: inset(50%); overflow: hidden; white-space: nowrap; }
 
 
@@ -205,6 +203,9 @@ progress { display: block; width: 100%; margin-top: 6px; accent-color: var(--acc
 .access-screen h1 { font-size: 1.6rem; }
 .access-screen .dialog-form { width: 100%; text-align: left; }
 .preview-trigger {
+  display: flex;
+  align-items: center;
+  gap: inherit;
   min-width: 0;
   padding: 0;
   border: 0;
@@ -267,6 +268,21 @@ progress { display: block; width: 100%; margin-top: 6px; accent-color: var(--acc
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+.hljs-keyword, .hljs-selector-tag, .hljs-meta { color: #dda8ff; }
+.hljs-string, .hljs-regexp { color: #a9dfa3; }
+.hljs-number, .hljs-literal, .hljs-symbol { color: #ffbf8e; }
+.hljs-title, .hljs-attr, .hljs-attribute, .hljs-built_in, .hljs-type { color: #9cd8ff; }
+.hljs-comment, .hljs-quote { color: var(--muted); font-style: italic; }
+.hljs-deletion { color: #ffa6a6; }
+.hljs-addition { color: #a9dfa3; }
+.hljs-emphasis { font-style: italic; }
+.hljs-strong { font-weight: bold; }
+.pdf-preview { display: grid; grid-template-rows: auto minmax(0, 1fr); gap: 8px; height: 100%; }
+.pdf-toolbar { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 8px; }
+.pdf-toolbar .meta { white-space: normal; text-align: center; }
+.pdf-page { min-width: 0; overflow: auto; scrollbar-gutter: stable both-edges; }
+.pdf-page canvas { display: block; max-width: 100%; height: auto; margin-inline: auto; background: white; }
+.archive-entry .pdf-preview { height: 65vh; }
 .preview-message { color: var(--muted); font-size: .85rem; }
 .preview-content pre + .preview-message { margin-top: 12px; }
 .preview-footer { border-top: 1px solid var(--border); }

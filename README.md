@@ -17,7 +17,7 @@ After signing in, members can browse the drive, preview files, upload, download,
 
 Drag a drive item onto another folder to move it there. In a subfolder, drop an item on the `..` row to move it up one level.
 
-Images, audio, video, text, and Blender/COLLADA (`.dae`) models can be previewed. A `.dae` model is shown as a rotatable 3D view, and uses a texture image from the same drive folder as its albedo map. `.zip` and `.7z` archives open as a browsable file list, and previewable entries can be opened from there. Archive browsing uses the 7-Zip command-line tool on the host; set `SEVEN_ZIP_PATH` if `7z` is not in a standard location.
+Images, audio, video, text, and PDFs can be previewed. Source files such as JavaScript, Python, and TypeScript get syntax coloring, and multi-page PDFs have page navigation. COLLADA (`.dae`) and Wavefront (`.obj`) models open in a rotatable 3D view. Keep their textures and any OBJ material files (`.mtl`) in the same drive folder. `.zip` and `.7z` archives open as a browsable file list, and previewable entries can be opened from there. Archive browsing uses the 7-Zip command-line tool on the host. Set `SEVEN_ZIP_PATH` if `7z` is not in a standard location.
 
 Drag the left edge of the preview drawer to resize it, or click outside to close it. The drive list shows small image and video thumbnails. Video thumbnails use a frame 25% into the clip when its duration is available. FFmpeg generates these thumbnails and browser-compatible previews for uploaded formats such as MOV, MKV, AVI, FLAC, and TIFF. The first preview of a large file can take time to generate. The server uses FFmpeg and FFprobe from `tools/ffmpeg/bin` when present, or from the host's PATH. A fresh checkout needs its own copy of those tools.
 
@@ -45,13 +45,17 @@ Restart the server after changing the file.
 
 ## Set up an admin
 
-Administrator accounts only exist in `account` mode. The first account registered on an empty drive becomes an active admin and is signed in automatically. To grant another registered account admin access, run this command on the host from the project folder, replacing `username` with that account’s username.
+In `account` and `ip` modes, the first registered account becomes the administrator. An existing IP-mode drive gives this role to its earliest registration. The IP-mode admin can rename or delete member accounts and set a temporary passphrase. The member must replace it before accessing the drive.
+
+In `account` mode, you can also grant another registered account admin access. Run this command on the host from the project folder, replacing `username` with that account’s username.
 
 ```sh
 npm run grant-admin -- username
 ```
 
 The command enables the account and grants it admin access. Sign in to see the Admin panel button. Admins can enable newly registered accounts, disable, re-enable, or delete member accounts, and view storage usage. Disabling a member revokes their sessions and blocks access until they are enabled again.
+
+Use **Settings → Sign-in** to change your password or passphrase. In shared-passphrase mode, `PASSPHRASE` supplies the initial value. Changes made in Settings are stored with the drive data and sign out everyone else using that shared passphrase.
 
 ## Data
 

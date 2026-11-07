@@ -24,11 +24,23 @@ const previewFormats = new Map(Object.entries({
   '.mp4': 'video/mp4', '.webm': 'video/webm',
   '.txt': 'text/plain', '.md': 'text/plain', '.csv': 'text/plain', '.tsv': 'text/plain',
   '.json': 'text/plain', '.log': 'text/plain', '.gltf': 'text/plain',
-  '.dae': 'model/vnd.collada+xml',
+  '.dae': 'model/vnd.collada+xml', '.obj': 'model/obj', '.mtl': 'text/plain', '.pdf': 'application/pdf',
+}));
+const codeLanguages = new Map(Object.entries({
+  '.js': 'javascript', '.mjs': 'javascript', '.cjs': 'javascript', '.jsx': 'javascript',
+  '.ts': 'typescript', '.tsx': 'typescript', '.mts': 'typescript', '.cts': 'typescript',
+  '.py': 'python', '.pyw': 'python', '.rb': 'ruby', '.php': 'php', '.pl': 'perl', '.lua': 'lua',
+  '.c': 'c', '.h': 'c', '.cpp': 'cpp', '.cc': 'cpp', '.cxx': 'cpp', '.hpp': 'cpp', '.cs': 'csharp',
+  '.java': 'java', '.kt': 'kotlin', '.kts': 'kotlin', '.go': 'go', '.rs': 'rust', '.swift': 'swift', '.m': 'objectivec',
+  '.sh': 'bash', '.bash': 'bash', '.zsh': 'bash', '.ps1': 'powershell', '.psm1': 'powershell',
+  '.html': 'xml', '.htm': 'xml', '.xml': 'xml', '.css': 'css', '.scss': 'scss', '.less': 'less',
+  '.json': 'json', '.jsonc': 'json', '.gltf': 'json', '.yaml': 'yaml', '.yml': 'yaml', '.toml': 'ini', '.ini': 'ini',
+  '.sql': 'sql', '.graphql': 'graphql', '.diff': 'diff', '.patch': 'diff', '.md': 'markdown',
+  makefile: 'makefile', dockerfile: 'dockerfile',
 }));
 const archiveFormats = new Map(Object.entries({ '.zip': 'zip', '.7z': '7z' }));
 const convertedFormats = new Map([
-  ...['.mov', '.mkv', '.avi', '.wmv', '.asf', '.flv', '.m4v', '.mpg', '.mpeg', '.ts', '.mts', '.m2ts', '.3gp', '.3g2', '.ogv']
+  ...['.mov', '.mkv', '.avi', '.wmv', '.asf', '.flv', '.m4v', '.mpg', '.mpeg', '.m2ts', '.3gp', '.3g2', '.ogv']
     .map((extension) => [extension, 'video']),
   ...['.flac', '.aac', '.aif', '.aiff', '.wma', '.opus', '.oga', '.caf', '.au', '.amr', '.ape', '.ac3', '.eac3', '.wv']
     .map((extension) => [extension, 'audio']),
@@ -40,8 +52,13 @@ const maxTextPreview = 128 * 1024;
 const maxArchiveEntry = 64 * 1024 * 1024;
 const maxArchiveEntries = 50_000;
 
+function codeLanguage(name) {
+  const lower = name.toLowerCase();
+  return codeLanguages.get(lower) || codeLanguages.get(path.extname(lower));
+}
+
 function previewFormat(name) {
-  return previewFormats.get(path.extname(name).toLowerCase());
+  return previewFormats.get(path.extname(name).toLowerCase()) || (codeLanguage(name) ? 'text/plain' : null);
 }
 
 function archiveFormat(name) {
@@ -52,7 +69,8 @@ function previewKind(name, { archiveEntry = false } = {}) {
   if (archiveFormat(name)) return 'archive';
   const format = previewFormat(name);
   if (!format) return archiveEntry ? null : convertedFormats.get(path.extname(name).toLowerCase()) || null;
-  if (format === 'model/vnd.collada+xml') return 'model';
+  if (format.startsWith('model/')) return 'model';
+  if (format === 'application/pdf') return 'pdf';
   return format.split('/')[0];
 }
 
@@ -116,6 +134,7 @@ function parseArchiveListing(output) {
       modified: item.Modified || null,
       encrypted: item.Encrypted === '+',
       preview,
+      ...(preview === 'text' && { language: codeLanguage(name) }),
       previewTruncated: preview === 'text' && size > maxTextPreview,
     });
     if (entries.length >= maxArchiveEntries) break;
@@ -193,8 +212,15 @@ function openDrive(data) {
       ip TEXT PRIMARY KEY,
       name TEXT NOT NULL,
       passphrase_hash TEXT NOT NULL,
+      role TEXT NOT NULL DEFAULT 'member' CHECK (role IN ('member', 'admin')),
+      must_change INTEGER NOT NULL DEFAULT 0,
       created_at INTEGER NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS drive_shared_auth (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      passphrase_hash TEXT
+    );
+    INSERT OR IGNORE INTO drive_shared_auth (id) VALUES (1);
     CREATE TABLE IF NOT EXISTS drive_items (
       id TEXT PRIMARY KEY,
       parent_id TEXT REFERENCES drive_items(id),
@@ -220,6 +246,26 @@ function openDrive(data) {
   if (!itemColumns.some((column) => column.name === 'created_by')) {
     db.exec('ALTER TABLE drive_items ADD COLUMN created_by TEXT');
   }
+  const ipColumns = () => new Set(db.prepare('PRAGMA table_info(drive_ip_users)').all().map(({ name }) => name));
+  const columns = ipColumns();
+  if (!columns.has('role') || !columns.has('must_change')) {
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      const current = ipColumns();
+      if (!current.has('role')) {
+        db.exec(`
+          ALTER TABLE drive_ip_users ADD COLUMN role TEXT NOT NULL DEFAULT 'member' CHECK (role IN ('member', 'admin'));
+          UPDATE drive_ip_users SET role = 'admin'
+          WHERE ip = (SELECT ip FROM drive_ip_users ORDER BY created_at, ip LIMIT 1);
+        `);
+      }
+      if (!current.has('must_change')) db.exec('ALTER TABLE drive_ip_users ADD COLUMN must_change INTEGER NOT NULL DEFAULT 0');
+      db.exec('COMMIT');
+    } catch (error) {
+      db.exec('ROLLBACK');
+      throw error;
+    }
+  }
   return db;
 }
 
@@ -239,6 +285,16 @@ function tokenFrom(req) {
 async function hashPassword(password, salt = randomBytes(16).toString('hex')) {
   const key = await deriveKey(password, salt, 64);
   return salt + ':' + key.toString('hex');
+}
+
+async function matchesPassword(password, stored) {
+  const actual = await hashPassword(password, stored.split(':', 1)[0]);
+  return timingSafeEqual(Buffer.from(stored), Buffer.from(actual));
+}
+
+function friendlyName(input) {
+  const name = typeof input === 'string' ? input.trim().normalize('NFC') : '';
+  return friendlyNamePattern.test(name) ? name : null;
 }
 
 function publicAccount(account) {
@@ -267,7 +323,9 @@ function createDriveRouter({ data, uploads, upload, removeBlob, authMode = 'acco
     ORDER BY c.position, c.id
   `);
   const getAccount = db.prepare('SELECT * FROM drive_accounts WHERE username = ?');
+  const getAccountById = db.prepare('SELECT * FROM drive_accounts WHERE id = ?');
   const getIpUser = db.prepare('SELECT * FROM drive_ip_users WHERE ip = ?');
+  const getSharedAuth = db.prepare('SELECT passphrase_hash FROM drive_shared_auth WHERE id = 1');
   const removeSession = db.prepare('DELETE FROM drive_sessions WHERE token_hash = ?');
   const removeExpired = db.prepare('DELETE FROM drive_sessions WHERE expires_at <= ?');
   const insertItem = db.prepare(`
@@ -283,6 +341,29 @@ function createDriveRouter({ data, uploads, upload, removeBlob, authMode = 'acco
     SELECT id, name FROM lineage ORDER BY depth DESC
   `);
   const sevenZip = resolveSevenZip();
+
+  async function filePreview(file) {
+    const extension = path.extname(file.name).toLowerCase();
+    if (extension === '.ts' || extension === '.mts') {
+      // These extensions also identify MPEG transport streams. Check three packet sync bytes.
+      const handle = await open(path.join(uploads, file.id), 'r').catch((error) => {
+        if (error.code !== 'ENOENT') throw error;
+        return null;
+      });
+      if (handle) {
+        try {
+          const header = Buffer.alloc(409);
+          await handle.read(header);
+          const video = [[188, 0], [192, 4], [204, 0]].some(([stride, start]) =>
+            header[start] === 0x47 && header[start + stride] === 0x47 && header[start + stride * 2] === 0x47);
+          if (video) return { kind: 'video', format: null };
+        } finally {
+          await handle.close();
+        }
+      }
+    }
+    return { kind: previewKind(file.name), format: previewFormat(file.name) };
+  }
 
   function archivePath(file) {
     return path.join(uploads, file.id);
@@ -366,26 +447,46 @@ function createDriveRouter({ data, uploads, upload, removeBlob, authMode = 'acco
   function hasPassphrase(req) {
     if (!passphraseRequired) return true;
     const token = cookieFrom(req, passphraseCookie);
-    return /^[a-f0-9]{64}$/.test(token || '') && passphraseSessions.get(token) > Date.now();
+    const session = token && passphraseSessions.get(token);
+    return Boolean(session && session.expiresAt > Date.now() && session.hash === getSharedAuth.get().passphrase_hash);
+  }
+
+  async function matchesSharedPassphrase(provided, stored) {
+    if (stored) return matchesPassword(provided, stored);
+    const digest = (value) => createHash('sha256').update(value).digest();
+    return timingSafeEqual(digest(passphrase), digest(provided));
+  }
+
+  function startPassphraseSession(req, res, hash) {
+    const token = randomBytes(32).toString('hex');
+    passphraseSessions.set(token, { hash, expiresAt: Date.now() + sessionDuration });
+    res.cookie(passphraseCookie, token, { ...cookieOptions(req), maxAge: sessionDuration });
   }
 
   function hasIpSession(req) {
     if (!ipMode) return true;
     const token = cookieFrom(req, ipCookie);
     const session = token ? ipSessions.get(token) : null;
-    return Boolean(session && session.expiresAt > Date.now() && session.ip === clientIp(req));
+    return Boolean(session && session.expiresAt > Date.now() && session.ip === clientIp(req)
+      && session.hash === req.driveIpUser?.passphrase_hash);
   }
 
-  function startIpSession(req, res) {
+  function startIpSession(req, res, hash) {
     const token = randomBytes(32).toString('hex');
-    ipSessions.set(token, { ip: clientIp(req), expiresAt: Date.now() + sessionDuration });
+    ipSessions.set(token, { ip: clientIp(req), hash, expiresAt: Date.now() + sessionDuration });
     res.cookie(ipCookie, token, { ...cookieOptions(req), maxAge: sessionDuration });
+  }
+
+  function revokeIpSessions(ip) {
+    for (const [token, session] of ipSessions) {
+      if (session.ip === ip) ipSessions.delete(token);
+    }
   }
 
   setInterval(() => {
     const now = Date.now();
-    for (const [token, expiresAt] of passphraseSessions) {
-      if (expiresAt <= now) passphraseSessions.delete(token);
+    for (const [token, session] of passphraseSessions) {
+      if (session.expiresAt <= now) passphraseSessions.delete(token);
     }
     for (const [token, session] of ipSessions) {
       if (session.expiresAt <= now) ipSessions.delete(token);
@@ -402,6 +503,7 @@ function createDriveRouter({ data, uploads, upload, removeBlob, authMode = 'acco
 
   function readSession(req, res, next) {
     req.driveToken = tokenFrom(req);
+    if (ipMode) req.driveIpUser = getIpUser.get(clientIp(req));
     if (accountsEnabled && req.driveToken) {
       req.driveAccount = db.prepare(`
         SELECT a.id, a.username, a.role, s.expires_at FROM drive_sessions s
@@ -419,6 +521,9 @@ function createDriveRouter({ data, uploads, upload, removeBlob, authMode = 'acco
     if (ipMode && !hasIpSession(req)) {
       return res.status(401).json({ error: 'Register or enter your passphrase to access the drive.', authMode, ipRequired: true });
     }
+    if (ipMode && req.driveIpUser.must_change) {
+      return res.status(401).json({ error: 'Change your temporary passphrase to access the drive.', authMode, ipRequired: true });
+    }
     if (accountsEnabled && !req.driveAccount) {
       return res.status(401).json({ error: 'Sign in to access the drive.', authMode, signInRequired: true });
     }
@@ -431,7 +536,8 @@ function createDriveRouter({ data, uploads, upload, removeBlob, authMode = 'acco
   }
 
   function requireAdmin(req, res, next) {
-    if (req.driveAccount?.role !== 'admin') return res.status(403).json({ error: 'Administrator access is required.' });
+    const role = ipMode ? req.driveIpUser?.role : req.driveAccount?.role;
+    if (role !== 'admin') return res.status(403).json({ error: 'Administrator access is required.' });
     next();
   }
 
@@ -466,29 +572,31 @@ function createDriveRouter({ data, uploads, upload, removeBlob, authMode = 'acco
       res.clearCookie(sessionCookie, { ...cookieOptions(req), path: '/api/drive' });
       res.cookie(sessionCookie, req.driveToken, { ...cookieOptions(req), expires: new Date(req.driveAccount.expires_at) });
     }
-    const ipUser = ipMode ? getIpUser.get(clientIp(req)) : null;
+    const ipAddress = ipMode ? clientIp(req) : null;
+    const ipUser = req.driveIpUser;
+    const ipUnlocked = ipMode ? hasIpSession(req) : true;
     res.json({
       authMode,
       account: accountsEnabled && req.driveAccount ? publicAccount(req.driveAccount) : null,
       passphraseRequired,
       passphraseUnlocked: passphraseRequired ? hasPassphrase(req) : true,
       ipRegistered: Boolean(ipUser),
+      ipAddress,
       ipName: ipUser?.name || null,
-      ipUnlocked: ipMode ? hasIpSession(req) : true,
+      ipUnlocked: ipUnlocked && !ipUser?.must_change,
+      ipRole: ipMode && ipUnlocked ? ipUser.role : null,
+      ipMustChange: Boolean(ipMode && ipUnlocked && ipUser.must_change),
     });
   });
 
-  router.post('/passphrase', limitAuth, (req, res) => {
+  router.post('/passphrase', limitAuth, async (req, res) => {
     if (!passphraseRequired) return res.status(404).json({ error: 'Passphrase access is disabled.' });
     const provided = typeof req.body?.passphrase === 'string' ? req.body.passphrase : '';
-    const expected = createHash('sha256').update(passphrase).digest();
-    const actual = createHash('sha256').update(provided).digest();
-    if (!timingSafeEqual(expected, actual)) {
+    const stored = getSharedAuth.get().passphrase_hash;
+    if (!await matchesSharedPassphrase(provided, stored) || getSharedAuth.get().passphrase_hash !== stored) {
       return res.status(401).json({ error: 'That passphrase is incorrect.' });
     }
-    const token = randomBytes(32).toString('hex');
-    passphraseSessions.set(token, Date.now() + sessionDuration);
-    res.cookie(passphraseCookie, token, { ...cookieOptions(req), maxAge: sessionDuration });
+    startPassphraseSession(req, res, stored);
     res.json({ unlocked: true });
   });
 
@@ -498,33 +606,34 @@ function createDriveRouter({ data, uploads, upload, removeBlob, authMode = 'acco
     if (getIpUser.get(ip)) {
       return res.status(409).json({ error: 'This network is already registered. Enter its passphrase.', needsLogin: true });
     }
-    const name = typeof req.body?.name === 'string' ? req.body.name.trim().normalize('NFC') : '';
+    const name = friendlyName(req.body?.name);
     const provided = req.body?.passphrase;
-    if (!friendlyNamePattern.test(name) || typeof provided !== 'string' || provided.length < 6 || provided.length > 128) {
+    if (!name || typeof provided !== 'string' || provided.length < 6 || provided.length > 128) {
       return res.status(400).json({ error: 'Choose a name of up to 40 characters and a passphrase of at least 6 characters.' });
     }
     const passphraseHash = await hashPassword(provided);
     const inserted = db.prepare(`
-      INSERT INTO drive_ip_users (ip, name, passphrase_hash, created_at)
-      VALUES (?, ?, ?, ?) ON CONFLICT (ip) DO NOTHING
+      INSERT INTO drive_ip_users (ip, name, passphrase_hash, role, created_at)
+      VALUES (?, ?, ?, CASE WHEN NOT EXISTS (SELECT 1 FROM drive_ip_users) THEN 'admin' ELSE 'member' END, ?)
+      ON CONFLICT (ip) DO NOTHING
     `).run(ip, name, passphraseHash, Date.now());
     if (!inserted.changes) {
       return res.status(409).json({ error: 'This network is already registered. Enter its passphrase.', needsLogin: true });
     }
-    startIpSession(req, res);
+    startIpSession(req, res, passphraseHash);
     res.status(201).json({ ipName: name });
   });
 
   router.post('/ip/login', limitAuth, async (req, res) => {
     if (!ipMode) return res.status(404).json({ error: 'Network sign-in is disabled.' });
-    const user = getIpUser.get(clientIp(req));
+    const user = req.driveIpUser;
     if (!user) return res.status(404).json({ error: 'This network has not been registered yet.', needsRegistration: true });
     const provided = typeof req.body?.passphrase === 'string' ? req.body.passphrase : '';
-    const actual = await hashPassword(provided, user.passphrase_hash.split(':', 1)[0]);
-    if (!timingSafeEqual(Buffer.from(user.passphrase_hash), Buffer.from(actual))) {
+    if (!await matchesPassword(provided, user.passphrase_hash)
+      || getIpUser.get(user.ip)?.passphrase_hash !== user.passphrase_hash) {
       return res.status(401).json({ error: 'That passphrase is incorrect.' });
     }
-    startIpSession(req, res);
+    startIpSession(req, res, user.passphrase_hash);
     res.json({ ipName: user.name });
   });
 
@@ -577,6 +686,61 @@ function createDriveRouter({ data, uploads, upload, removeBlob, authMode = 'acco
     }
     startSession(req, res, account);
     res.json({ account: publicAccount(account) });
+  });
+
+  router.post('/password', limitAuth, async (req, res) => {
+    const authorized = ipMode ? hasIpSession(req) : passphraseRequired ? hasPassphrase(req) : req.driveAccount;
+    if (!authorized) return requireAccess(req, res, () => res.sendStatus(401));
+    const { currentPassword, newPassword } = req.body || {};
+    const minimum = accountsEnabled ? 10 : 6;
+    const label = accountsEnabled ? 'password' : 'passphrase';
+    if (typeof currentPassword !== 'string' || typeof newPassword !== 'string'
+      || newPassword.length < minimum || newPassword.length > 128) {
+      return res.status(400).json({ error: `Enter your current ${label} and choose a new one with ${minimum}–128 characters.` });
+    }
+    if (currentPassword === newPassword) {
+      return res.status(400).json({ error: `Choose a different ${label}.` });
+    }
+
+    const account = accountsEnabled ? getAccountById.get(req.driveAccount.id) : req.driveIpUser;
+    const stored = passphraseRequired ? getSharedAuth.get().passphrase_hash : account?.password_hash || account?.passphrase_hash;
+    const matches = passphraseRequired
+      ? await matchesSharedPassphrase(currentPassword, stored)
+      : stored && await matchesPassword(currentPassword, stored);
+    if (!matches) return res.status(403).json({ error: `The current ${label} is incorrect.` });
+
+    const hash = await hashPassword(newPassword);
+    const changed = () => res.status(409).json({ error: 'Your sign-in changed. Sign in again and retry.' });
+    if (ipMode) {
+      if (!hasIpSession(req) || !db.prepare(`
+        UPDATE drive_ip_users SET passphrase_hash = ?, must_change = 0 WHERE ip = ? AND passphrase_hash = ?
+      `).run(hash, account.ip, stored).changes) return changed();
+      revokeIpSessions(account.ip);
+      startIpSession(req, res, hash);
+    } else if (passphraseRequired) {
+      if (!hasPassphrase(req) || !db.prepare(`
+        UPDATE drive_shared_auth SET passphrase_hash = ? WHERE id = 1 AND passphrase_hash IS ?
+      `).run(hash, stored).changes) return changed();
+      passphraseSessions.clear();
+      startPassphraseSession(req, res, hash);
+    } else {
+      db.exec('BEGIN IMMEDIATE');
+      let committed = false;
+      try {
+        const updated = db.prepare(`
+          UPDATE drive_accounts SET password_hash = ? WHERE id = ? AND password_hash = ? AND disabled = 0
+          AND EXISTS (SELECT 1 FROM drive_sessions WHERE token_hash = ? AND expires_at > ?)
+        `).run(hash, account.id, stored, hashToken(req.driveToken), Date.now());
+        if (!updated.changes) return changed();
+        db.prepare('DELETE FROM drive_sessions WHERE account_id = ?').run(account.id);
+        db.exec('COMMIT');
+        committed = true;
+      } finally {
+        if (!committed) db.exec('ROLLBACK');
+      }
+      startSession(req, res, account);
+    }
+    res.sendStatus(204);
   });
 
   router.use(requireAccess);
@@ -643,7 +807,7 @@ function createDriveRouter({ data, uploads, upload, removeBlob, authMode = 'acco
     res.sendStatus(204);
   });
 
-  router.get('/folders/:id', (req, res) => {
+  router.get('/folders/:id', async (req, res) => {
     const folder = getItem.get(req.params.id);
     if (folder?.kind !== 'folder') return res.status(404).json({ error: 'Folder not found.' });
     const items = db.prepare(`
@@ -652,11 +816,11 @@ function createDriveRouter({ data, uploads, upload, removeBlob, authMode = 'acco
     `).all(folder.id);
     for (const item of items) {
       if (item.kind !== 'file') continue;
-      item.preview = previewKind(item.name);
-      if (item.preview && !previewFormat(item.name) && compatibleMediaTypes.has(item.preview)) {
-        item.convertPreview = true;
-      }
-      item.previewTruncated = item.preview === 'text' && item.size > maxTextPreview;
+      const { kind, format } = await filePreview(item);
+      item.preview = kind;
+      if (!format && compatibleMediaTypes.has(kind)) item.convertPreview = true;
+      if (kind === 'text') item.language = codeLanguage(item.name);
+      item.previewTruncated = kind === 'text' && item.size > maxTextPreview;
     }
     const categories = getCategories.all().map(({ id, name }) => ({ id, name }));
     res.json({ id: folder.id, path: getLineage.all(folder.id), items, categories });
@@ -814,7 +978,7 @@ function createDriveRouter({ data, uploads, upload, removeBlob, authMode = 'acco
   router.get('/files/:id/thumbnail', async (req, res) => {
     const file = getItem.get(req.params.id);
     if (file?.kind !== 'file') return res.sendStatus(404);
-    const kind = previewKind(file.name);
+    const { kind } = await filePreview(file);
     if (kind !== 'image' && kind !== 'video') return res.sendStatus(415);
     await sendMediaPreview(res, file, 'thumbnail', kind, 'image/jpeg');
   });
@@ -822,8 +986,7 @@ function createDriveRouter({ data, uploads, upload, removeBlob, authMode = 'acco
   router.get('/files/:id/preview', async (req, res) => {
     const file = getItem.get(req.params.id);
     if (file?.kind !== 'file') return res.status(404).json({ error: 'File not found.' });
-    const format = previewFormat(file.name);
-    const kind = previewKind(file.name);
+    const { kind, format } = await filePreview(file);
     if ((!format || req.query.compatible === '1') && compatibleMediaTypes.has(kind)) {
       return sendMediaPreview(res, file, kind, kind, compatibleMediaTypes.get(kind));
     }
@@ -851,7 +1014,10 @@ function createDriveRouter({ data, uploads, upload, removeBlob, authMode = 'acco
   });
 
   router.get('/admin/accounts', requireAdmin, (req, res) => {
-    const accounts = db.prepare(`
+    const accounts = ipMode ? db.prepare(`
+      SELECT ip AS id, ip, name AS username, role, must_change AS resetRequired
+      FROM drive_ip_users ORDER BY name COLLATE NOCASE, ip
+    `).all() : db.prepare(`
       SELECT id, username, role, disabled, created_at AS createdAt
       FROM drive_accounts ORDER BY username
     `).all();
@@ -862,6 +1028,14 @@ function createDriveRouter({ data, uploads, upload, removeBlob, authMode = 'acco
   });
 
   router.patch('/admin/accounts/:id', requireAdmin, (req, res) => {
+    if (ipMode) {
+      const name = friendlyName(req.body?.name);
+      if (!name) return res.status(400).json({ error: 'Choose a friendly name of up to 40 characters.' });
+      if (!db.prepare('UPDATE drive_ip_users SET name = ? WHERE ip = ?').run(name, req.params.id).changes) {
+        return res.status(404).json({ error: 'Account not found.' });
+      }
+      return res.sendStatus(204);
+    }
     const disabled = req.body?.disabled;
     if (typeof disabled !== 'boolean') return res.status(400).json({ error: 'Choose a valid account status.' });
     const target = db.prepare('SELECT role FROM drive_accounts WHERE id = ?').get(req.params.id);
@@ -880,8 +1054,36 @@ function createDriveRouter({ data, uploads, upload, removeBlob, authMode = 'acco
     res.sendStatus(204);
   });
 
+  router.post('/admin/accounts/:id/reset-passphrase', requireAdmin, async (req, res) => {
+    if (!ipMode) return res.status(404).json({ error: 'Network accounts are disabled.' });
+    const target = getIpUser.get(req.params.id);
+    if (!target) return res.status(404).json({ error: 'Account not found.' });
+    if (target.role === 'admin') return res.status(400).json({ error: 'Change your own passphrase in Settings.' });
+    const { passphrase } = req.body || {};
+    if (typeof passphrase !== 'string' || passphrase.length < 6 || passphrase.length > 128) {
+      return res.status(400).json({ error: 'Choose a temporary passphrase with 6–128 characters.' });
+    }
+    const hash = await hashPassword(passphrase);
+    if (!hasIpSession(req)) return res.status(401).json({ error: 'Sign in again.', ipRequired: true });
+    const updated = db.prepare(`
+      UPDATE drive_ip_users SET passphrase_hash = ?, must_change = 1
+      WHERE ip = ? AND role = 'member' AND passphrase_hash = ?
+    `).run(hash, target.ip, target.passphrase_hash);
+    if (!updated.changes) return res.status(409).json({ error: 'This account changed. Refresh the admin panel and retry.' });
+    revokeIpSessions(target.ip);
+    res.sendStatus(204);
+  });
+
   router.delete('/admin/accounts/:id', requireAdmin, (req, res) => {
     const id = req.params.id;
+    if (ipMode) {
+      if (db.prepare("DELETE FROM drive_ip_users WHERE ip = ? AND role = 'member'").run(id).changes) {
+        revokeIpSessions(id);
+        return res.sendStatus(204);
+      }
+      if (!getIpUser.get(id)) return res.status(404).json({ error: 'Account not found.' });
+      return res.status(400).json({ error: 'The network administrator cannot be deleted.' });
+    }
     const removed = db.prepare("DELETE FROM drive_accounts WHERE id = ? AND role = 'member'").run(id);
     if (removed.changes) return res.sendStatus(204);
     const exists = db.prepare('SELECT 1 FROM drive_accounts WHERE id = ?').get(id);
