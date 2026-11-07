@@ -316,7 +316,7 @@ progress { display: block; width: 100%; margin-top: 6px; accent-color: var(--acc
 .theme-option:has(:checked) { border-color: var(--accent); background: var(--accent-soft); }
 .theme-option input { margin: 0; accent-color: var(--accent); }
 .theme-swatch { width: 34px; height: 22px; border: 1px solid var(--strong-border); border-radius: 4px; }
-.theme-swatch-default { background: linear-gradient(135deg, #19191c 62%, #df7474 63%); }
+.theme-swatch-graphite { background: linear-gradient(135deg, #19191c 62%, #df7474 63%); }
 .theme-swatch-vista { background: #136c74 url("/vista-wallpaper.png") center / cover; }
 
 .drop-hint {

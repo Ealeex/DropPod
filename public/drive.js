@@ -447,7 +447,7 @@ function accountDialog(mode, afterSignIn) {
     const result = await request(registering ? '/register' : '/login', {
       method: 'POST', body: { username: fields.get('username'), password: fields.get('password') },
     });
-    if (registering) {
+    if (registering && !result.account) {
       if (form.isConnected && dialog.open) {
         showDialog('Account requested', '<p class="dialog-copy">An admin must enable your account before you can sign in.</p><div class="dialog-actions"><button id="back-to-sign-in" class="button primary" type="button" autofocus>Back to sign in</button></div>');
         $('#back-to-sign-in').addEventListener('click', () => accountDialog('login', afterSignIn));
@@ -778,7 +778,9 @@ async function uploadFiles(files) {
 }
 
 function applyTheme(theme) {
-  document.documentElement.dataset.theme = theme === 'vista' ? 'vista' : 'default';
+  const useGraphite = theme === 'graphite' || theme === 'default';
+  document.documentElement.dataset.theme = useGraphite ? 'graphite' : 'vista';
+  $('meta[name="theme-color"]').content = useGraphite ? '#101112' : '#0b2633';
 }
 
 function openSettings() {
@@ -786,17 +788,17 @@ function openSettings() {
     <fieldset class="theme-options">
       <legend>Theme</legend>
       <label class="theme-option">
-        <input type="radio" name="drive-theme" value="default">
-        <span class="theme-swatch theme-swatch-default" aria-hidden="true"></span>
-        <span>Default</span>
-      </label>
-      <label class="theme-option">
         <input type="radio" name="drive-theme" value="vista">
         <span class="theme-swatch theme-swatch-vista" aria-hidden="true"></span>
         <span>Vista Glass</span>
       </label>
+      <label class="theme-option">
+        <input type="radio" name="drive-theme" value="graphite">
+        <span class="theme-swatch theme-swatch-graphite" aria-hidden="true"></span>
+        <span>Graphite</span>
+      </label>
     </fieldset>`);
-  const activeTheme = document.documentElement.dataset.theme || 'default';
+  const activeTheme = document.documentElement.dataset.theme;
   for (const input of dialogBody.querySelectorAll('input[name="drive-theme"]')) {
     input.checked = input.value === activeTheme;
     input.addEventListener('change', () => {
@@ -958,7 +960,7 @@ window.addEventListener('pageshow', (event) => {
 try {
   applyTheme(localStorage.getItem('firesend:drive-theme'));
 } catch {
-  applyTheme('default');
+  applyTheme('vista');
 }
 
 request('/session').then(({ account }) => setAccount(account)).catch((error) => {

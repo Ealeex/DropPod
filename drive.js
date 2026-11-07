@@ -244,12 +244,18 @@ function createDriveRouter({ data, uploads, upload, removeBlob }) {
     }
     const id = randomUUID();
     const passwordHash = await hashPassword(password);
-    const result = db.prepare(`
-      INSERT INTO drive_accounts (id, username, password_hash, disabled, created_at)
-      VALUES (?, ?, ?, 1, ?) ON CONFLICT (username) DO NOTHING
-    `).run(id, username, passwordHash, Date.now());
-    if (!result.changes) return res.status(409).json({ error: 'That username is already taken.' });
-    res.status(201).json({ status: 'pending-approval' });
+    const account = db.prepare(`
+      WITH bootstrap(first_account) AS (SELECT NOT EXISTS (SELECT 1 FROM drive_accounts))
+      INSERT INTO drive_accounts (id, username, password_hash, role, disabled, created_at)
+      SELECT ?, ?, ?, CASE WHEN first_account THEN 'admin' ELSE 'member' END, 1 - first_account, ?
+      FROM bootstrap WHERE true
+      ON CONFLICT (username) DO NOTHING
+      RETURNING id, username, role, disabled
+    `).get(id, username, passwordHash, Date.now());
+    if (!account) return res.status(409).json({ error: 'That username is already taken.' });
+    if (account.disabled) return res.status(201).json({ status: 'pending-approval' });
+    startSession(req, res, account);
+    res.status(201).json({ account: publicAccount(account) });
   });
 
   router.post('/login', limitAuth, async (req, res) => {
