@@ -226,6 +226,9 @@ function openDrive(data) {
       ip TEXT PRIMARY KEY,
       name TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS drive_guest_admins (
+      ip TEXT PRIMARY KEY
+    );
     CREATE TABLE IF NOT EXISTS drive_shared_auth (
       id INTEGER PRIMARY KEY CHECK (id = 1),
       passphrase_hash TEXT
@@ -345,6 +348,7 @@ function createDriveRouter({ data, uploads, upload, removeBlob, authMode = 'acco
   const getAccountById = db.prepare('SELECT * FROM drive_accounts WHERE id = ?');
   const getIpUser = db.prepare('SELECT * FROM drive_ip_users WHERE ip = ?');
   const getGuestName = db.prepare('SELECT name FROM drive_guest_names WHERE ip = ?');
+  const getGuestAdmin = db.prepare('SELECT 1 FROM drive_guest_admins WHERE ip = ?');
   const insertGuestName = db.prepare('INSERT INTO drive_guest_names (ip, name) VALUES (?, ?) ON CONFLICT (ip) DO NOTHING');
   const getSharedAuth = db.prepare('SELECT passphrase_hash FROM drive_shared_auth WHERE id = 1');
   const removeSession = db.prepare('DELETE FROM drive_sessions WHERE token_hash = ?');
@@ -560,6 +564,7 @@ function createDriveRouter({ data, uploads, upload, removeBlob, authMode = 'acco
     if (authDisabled) {
       req.driveGuestIp = clientIp(req);
       req.driveGuestName = getGuestName.get(req.driveGuestIp)?.name || getIpUser.get(req.driveGuestIp)?.name || null;
+      req.driveGuestRole = req.driveGuestName && getGuestAdmin.get(req.driveGuestIp) ? 'admin' : 'member';
       return next();
     }
     req.driveToken = tokenFrom(req);
@@ -599,7 +604,7 @@ function createDriveRouter({ data, uploads, upload, removeBlob, authMode = 'acco
   }
 
   function requireAdmin(req, res, next) {
-    const role = ipMode ? req.driveIpUser?.role : req.driveAccount?.role;
+    const role = authDisabled ? req.driveGuestRole : ipMode ? req.driveIpUser?.role : req.driveAccount?.role;
     if (role !== 'admin') return res.status(403).json({ error: 'Administrator access is required.' });
     next();
   }
@@ -641,6 +646,8 @@ function createDriveRouter({ data, uploads, upload, removeBlob, authMode = 'acco
     res.json({
       authMode,
       guestName: req.driveGuestName || null,
+      guestRole: req.driveGuestRole || null,
+      guestIp: req.driveGuestIp || null,
       account: accountsEnabled && req.driveAccount ? publicAccount(req.driveAccount) : null,
       passphraseRequired,
       passphraseUnlocked: passphraseRequired ? hasPassphrase(req) : true,
@@ -1179,7 +1186,16 @@ function createDriveRouter({ data, uploads, upload, removeBlob, authMode = 'acco
   }
 
   router.get('/admin/accounts', requireAdmin, (req, res) => {
-    const accounts = ipMode ? db.prepare(`
+    const accounts = authDisabled ? db.prepare(`
+      WITH guests AS (
+        SELECT ip, name FROM drive_guest_names
+        UNION ALL
+        SELECT ip, name FROM drive_ip_users WHERE ip NOT IN (SELECT ip FROM drive_guest_names)
+      )
+      SELECT guests.ip AS id, guests.ip, name AS username,
+        CASE WHEN drive_guest_admins.ip IS NULL THEN 'member' ELSE 'admin' END AS role
+      FROM guests LEFT JOIN drive_guest_admins USING (ip) ORDER BY name COLLATE NOCASE, guests.ip
+    `).all() : ipMode ? db.prepare(`
       SELECT ip AS id, ip, name AS username, role, must_change AS resetRequired
       FROM drive_ip_users ORDER BY name COLLATE NOCASE, ip
     `).all() : db.prepare(`
@@ -1193,9 +1209,18 @@ function createDriveRouter({ data, uploads, upload, removeBlob, authMode = 'acco
   });
 
   router.patch('/admin/accounts/:id', requireAdmin, (req, res) => {
-    if (ipMode) {
+    if (ipMode || authDisabled) {
       const name = friendlyName(req.body?.name);
       if (!name) return res.status(400).json({ error: 'Choose a friendly name of up to 40 characters.' });
+      if (authDisabled) {
+        const ip = req.params.id;
+        if (!getGuestName.get(ip) && !getIpUser.get(ip)) return res.status(404).json({ error: 'Account not found.' });
+        db.prepare(`
+          INSERT INTO drive_guest_names (ip, name) VALUES (?, ?)
+          ON CONFLICT (ip) DO UPDATE SET name = excluded.name
+        `).run(ip, name);
+        return res.sendStatus(204);
+      }
       if (!db.prepare('UPDATE drive_ip_users SET name = ? WHERE ip = ?').run(name, req.params.id).changes) {
         return res.status(404).json({ error: 'Account not found.' });
       }
@@ -1240,6 +1265,7 @@ function createDriveRouter({ data, uploads, upload, removeBlob, authMode = 'acco
   });
 
   router.delete('/admin/accounts/:id', requireAdmin, (req, res) => {
+    if (authDisabled) return res.sendStatus(404);
     const id = req.params.id;
     if (ipMode) {
       if (db.prepare("DELETE FROM drive_ip_users WHERE ip = ? AND role = 'member'").run(id).changes) {

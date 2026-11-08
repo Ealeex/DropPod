@@ -1,6 +1,6 @@
 import { Euler, MathUtils, Vector3 } from 'three';
 
-const movementKeys = new Set(['KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyR', 'KeyF']);
+const movementKeys = new Set(['KeyW', 'KeyA', 'KeyS', 'KeyD', 'KeyE', 'KeyQ']);
 
 export function createFlyControls(camera, canvas) {
   const events = new AbortController();
@@ -73,7 +73,7 @@ export function createFlyControls(camera, canvas) {
     setEnabled,
     update(distance) {
       direction.set(Number(keys.has('KeyD')) - Number(keys.has('KeyA')),
-        Number(keys.has('KeyR')) - Number(keys.has('KeyF')),
+        Number(keys.has('KeyE')) - Number(keys.has('KeyQ')),
         Number(keys.has('KeyS')) - Number(keys.has('KeyW'))).normalize().multiplyScalar(distance);
       camera.translateX(direction.x);
       camera.position.y += direction.y;

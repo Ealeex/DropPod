@@ -49,7 +49,7 @@ For a self-contained release, ship native tools and their required libraries in 
 
 ### Blender previews
 
-The 3D preview opens in **Orbit** mode. Choose **Fly** for WASD movement, R/F to rise and descend, and adjustable speed. Click the scene to capture the mouse or drag to look around. Press Escape to release the mouse.
+The 3D preview opens in **Orbit** mode. Choose **Fly** for WASD movement, Q to descend and E to rise, and adjustable speed. Click the scene to capture the mouse or drag to look around. Press Escape to release the mouse.
 
 **Windows with Ubuntu WSL.** Open Ubuntu on x86-64 and install Bubblewrap and [uv](https://docs.astral.sh/uv/getting-started/installation/). From the FireSend project directory inside Ubuntu, run:
 
@@ -68,7 +68,7 @@ docker build --platform linux/amd64 -t firesend-blender-preview ./tools/blender-
 
 Set `BLENDER_PREVIEW_IMAGE=firesend-blender-preview` in `.env` and restart FireSend. Set `DOCKER_PATH` if Docker is outside the server’s PATH. ARM hosts need Docker’s AMD64 emulation for this image.
 
-FireSend converts the active scene to GLB on the first preview and caches it for later views. Pack textures into the Blender file before uploading. The converter scales oversized packed images to a maximum of 2048 pixels on their longest edge in the preview. Blender previews use neutral lighting for inspection. Procedural materials can look different from the Blender render. The 3D viewer opens in Orbit mode. Switch to **Fly** to move with WASD, move vertically with R/F, and look around by clicking or dragging. The speed slider adjusts movement for the current scene. Both runners receive the upload through a pipe, disable automatic Blender scripts, and limit conversion to 60 seconds and 128 MiB each for the upload and resulting GLB.
+FireSend converts the active scene to GLB on the first preview and caches it for later views. Pack textures into the Blender file before uploading. The converter scales oversized packed images to a maximum of 2048 pixels on their longest edge in the preview. Blender previews use neutral lighting for inspection. Procedural materials can look different from the Blender render. The 3D viewer opens in Orbit mode. Switch to **Fly** to move with WASD, descend with Q and rise with E, and look around by clicking or dragging. The speed slider adjusts movement for the current scene. Both runners receive the upload through a pipe, disable automatic Blender scripts, and limit conversion to 60 seconds and 128 MiB each for the upload and resulting GLB.
 
 ## Configuration
 
@@ -138,6 +138,8 @@ npm run grant-admin -- username
 The command enables the account and grants it admin access. Sign in to see the Admin panel button. Admins can enable newly registered accounts, disable, re-enable, or delete member accounts, and view storage usage. Disabling a member revokes their sessions and blocks access until they are enabled again.
 
 In IP mode, use the connecting address shown on the sign-in screen in place of the username. The address must be registered first. This lets you grant admin access to a new client address after setting up a reverse proxy.
+
+In `off` mode, run `npm run grant-admin -- <client-ip>` on the host. The address can be granted access before or after it chooses a friendly name. Refresh the drive from that address to open the Admin panel and manage guest names. Everyone connecting from that same IP shares its administrator access.
 
 Use **Settings → Sign-in** to change your password or passphrase. In shared-passphrase mode, `PASSPHRASE` supplies the initial value. Changes made in Settings are stored with the drive data and sign out everyone else using that shared passphrase.
 

@@ -118,6 +118,7 @@ function renderAccount() {
   const badge = document.createElement('span');
   badge.className = 'account-name';
   badge.textContent = state.account.username;
+  if (state.authMode === 'off' && state.account.id) badge.title = state.account.id;
   controls.replaceChildren(badge);
   if (state.account.role === 'admin') {
     const button = makeButton('Admin panel', openAdmin);
@@ -175,6 +176,8 @@ function showGuestScreen(message = '') {
   $('#passphrase-screen').hidden = true;
   $('#ip-screen').hidden = true;
   $('#guest-screen').hidden = false;
+  $('#guest-address strong').textContent = state.ipAddress || '';
+  $('#guest-address').hidden = !state.ipAddress;
   showError($('#guest-error'), message);
   $('#guest-name-input').focus();
 }
@@ -186,8 +189,8 @@ async function submitGuestName(event) {
   showError($('#guest-error'));
   button.disabled = true;
   try {
-    const { guestName } = await request('/guest/register', { method: 'POST', body: { name: input.value } });
-    setAccount({ ...guestAccount, username: guestName });
+    await request('/guest/register', { method: 'POST', body: { name: input.value } });
+    await loadSession();
   } catch (error) {
     showError($('#guest-error'), error.message);
     input.focus();
@@ -252,7 +255,10 @@ async function loadSession() {
   const session = await request('/session');
   state.authMode = session.authMode || 'account';
   if (state.authMode === 'off') {
-    if (session.guestName) setAccount({ ...guestAccount, username: session.guestName });
+    state.ipAddress = session.guestIp || null;
+    if (session.guestName) setAccount({
+      ...guestAccount, id: session.guestIp, username: session.guestName, role: session.guestRole || 'member',
+    });
     else showGuestScreen();
     return;
   }
@@ -1571,6 +1577,7 @@ function editIpAccount(account, resetPassphrase) {
 function openAdmin() {
   if (state.account?.role !== 'admin') return;
   const ipMode = state.authMode === 'ip';
+  const offMode = state.authMode === 'off';
   showDialog('Admin panel', `
     <p id="admin-summary" class="dialog-copy">Loading accounts…</p>
     <ul id="admin-list" class="admin-list"></ul>`);
@@ -1589,7 +1596,7 @@ function openAdmin() {
         name.textContent = account.username;
         const status = document.createElement('p');
         status.textContent = account.role === 'admin' ? 'Administrator' : account.disabled ? 'Disabled' : 'Member';
-        if (ipMode) {
+        if (ipMode || offMode) {
           status.textContent = [status.textContent, account.ip, account.resetRequired ? 'Passphrase change required' : '']
             .filter(Boolean).join(' · ');
         }
@@ -1598,12 +1605,12 @@ function openAdmin() {
         const actions = document.createElement('div');
         actions.className = 'row-actions';
         const url = `/admin/accounts/${encodeURIComponent(account.id)}`;
-        if (ipMode) {
+        if (ipMode || offMode) {
           const rename = makeButton('Rename', () => editIpAccount(account, false));
           rename.setAttribute('aria-label', `Rename ${account.username}`);
           actions.append(rename);
         }
-        if (account.role !== 'admin') {
+        if (account.role !== 'admin' && !offMode) {
           if (ipMode) {
             const reset = makeButton('Reset passphrase', () => editIpAccount(account, true));
             reset.setAttribute('aria-label', `Reset passphrase for ${account.username}`);

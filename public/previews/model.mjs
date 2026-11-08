@@ -205,7 +205,7 @@ function createViewer(subject, name, missing, neutralLighting) {
     flyButton.setAttribute('aria-pressed', String(enabled));
     speedLabel.hidden = !enabled;
     hint.textContent = enabled
-      ? 'WASD to move · R/F up and down · Click or drag to look'
+      ? 'WASD to move · Q down · E up · Click or drag to look'
       : 'Drag to rotate · Scroll to zoom';
   }
   orbitButton.addEventListener('click', () => setFlyMode(false));
