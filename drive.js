@@ -222,6 +222,10 @@ function openDrive(data) {
       must_change INTEGER NOT NULL DEFAULT 0,
       created_at INTEGER NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS drive_guest_names (
+      ip TEXT PRIMARY KEY,
+      name TEXT NOT NULL
+    );
     CREATE TABLE IF NOT EXISTS drive_shared_auth (
       id INTEGER PRIMARY KEY CHECK (id = 1),
       passphrase_hash TEXT
@@ -340,6 +344,8 @@ function createDriveRouter({ data, uploads, upload, removeBlob, authMode = 'acco
   const getAccount = db.prepare('SELECT * FROM drive_accounts WHERE username = ?');
   const getAccountById = db.prepare('SELECT * FROM drive_accounts WHERE id = ?');
   const getIpUser = db.prepare('SELECT * FROM drive_ip_users WHERE ip = ?');
+  const getGuestName = db.prepare('SELECT name FROM drive_guest_names WHERE ip = ?');
+  const insertGuestName = db.prepare('INSERT INTO drive_guest_names (ip, name) VALUES (?, ?) ON CONFLICT (ip) DO NOTHING');
   const getSharedAuth = db.prepare('SELECT passphrase_hash FROM drive_shared_auth WHERE id = 1');
   const removeSession = db.prepare('DELETE FROM drive_sessions WHERE token_hash = ?');
   const removeExpired = db.prepare('DELETE FROM drive_sessions WHERE expires_at <= ?');
@@ -490,7 +496,7 @@ function createDriveRouter({ data, uploads, upload, removeBlob, authMode = 'acco
   function actorName(req) {
     if (accountsEnabled) return req.driveAccount?.username || 'Unknown';
     if (ipMode) return getIpUser.get(clientIp(req))?.name || 'Unknown';
-    return authDisabled ? 'Guest' : 'Shared drive';
+    return authDisabled ? req.driveGuestName : 'Shared drive';
   }
 
   function hasPassphrase(req) {
@@ -551,7 +557,11 @@ function createDriveRouter({ data, uploads, upload, removeBlob, authMode = 'acco
   });
 
   function readSession(req, res, next) {
-    if (authDisabled) return next();
+    if (authDisabled) {
+      req.driveGuestIp = clientIp(req);
+      req.driveGuestName = getGuestName.get(req.driveGuestIp)?.name || getIpUser.get(req.driveGuestIp)?.name || null;
+      return next();
+    }
     req.driveToken = tokenFrom(req);
     if (ipMode) req.driveIpUser = getIpUser.get(clientIp(req));
     if (accountsEnabled && req.driveToken) {
@@ -565,6 +575,9 @@ function createDriveRouter({ data, uploads, upload, removeBlob, authMode = 'acco
   }
 
   function requireAccess(req, res, next) {
+    if (authDisabled && !req.driveGuestName) {
+      return res.status(401).json({ error: 'Choose a friendly name to open the drive.', guestNameRequired: true });
+    }
     if (passphraseRequired && !hasPassphrase(req)) {
       return res.status(401).json({ error: 'Enter the passphrase to access the drive.', authMode, passphraseRequired: true });
     }
@@ -627,6 +640,7 @@ function createDriveRouter({ data, uploads, upload, removeBlob, authMode = 'acco
     const ipUnlocked = ipMode ? hasIpSession(req) : true;
     res.json({
       authMode,
+      guestName: req.driveGuestName || null,
       account: accountsEnabled && req.driveAccount ? publicAccount(req.driveAccount) : null,
       passphraseRequired,
       passphraseUnlocked: passphraseRequired ? hasPassphrase(req) : true,
@@ -637,6 +651,16 @@ function createDriveRouter({ data, uploads, upload, removeBlob, authMode = 'acco
       ipRole: ipMode && ipUnlocked ? ipUser.role : null,
       ipMustChange: Boolean(ipMode && ipUnlocked && ipUser.must_change),
     });
+  });
+
+  router.post('/guest/register', limitAuth, (req, res) => {
+    if (!authDisabled) return res.status(404).json({ error: 'Guest registration is disabled.' });
+    if (req.driveGuestName) return res.json({ guestName: req.driveGuestName });
+    const name = friendlyName(req.body?.name);
+    if (!name) return res.status(400).json({ error: 'Choose a friendly name of up to 40 characters without slashes.' });
+    const inserted = insertGuestName.run(req.driveGuestIp, name);
+    const guestName = inserted.changes ? name : getGuestName.get(req.driveGuestIp).name;
+    res.status(inserted.changes ? 201 : 200).json({ guestName });
   });
 
   router.post('/passphrase', limitAuth, async (req, res) => {

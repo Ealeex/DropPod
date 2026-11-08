@@ -52,7 +52,8 @@ async function request(path, { method = 'GET', body } = {}) {
   const data = await response.json();
   if (!response.ok) {
     if (response.status === 401) {
-      if (data.passphraseRequired) showPassphraseScreen('Enter the passphrase to continue.');
+      if (data.guestNameRequired) showGuestScreen(data.error);
+      else if (data.passphraseRequired) showPassphraseScreen('Enter the passphrase to continue.');
       else if (data.ipRequired) loadSession().catch(() => {});
       else if (data.signInRequired || state.account) setAccount(null);
     }
@@ -142,6 +143,7 @@ function setAccount(account) {
   const wasSignedIn = Boolean(state.account);
   state.account = account;
   state.accountReady = true;
+  $('#guest-screen').hidden = true;
   $('#access-screen').hidden = Boolean(state.account);
   $('#workspace').hidden = !state.account;
   renderAccount();
@@ -166,7 +168,36 @@ function setAccount(account) {
   else renderFolder();
 }
 
+function showGuestScreen(message = '') {
+  state.authMode = 'off';
+  setAccount(null);
+  $('#access-screen').hidden = true;
+  $('#passphrase-screen').hidden = true;
+  $('#ip-screen').hidden = true;
+  $('#guest-screen').hidden = false;
+  showError($('#guest-error'), message);
+  $('#guest-name-input').focus();
+}
+
+async function submitGuestName(event) {
+  event.preventDefault();
+  const button = event.currentTarget.querySelector('button[type="submit"]');
+  const input = $('#guest-name-input');
+  showError($('#guest-error'));
+  button.disabled = true;
+  try {
+    const { guestName } = await request('/guest/register', { method: 'POST', body: { name: input.value } });
+    setAccount({ ...guestAccount, username: guestName });
+  } catch (error) {
+    showError($('#guest-error'), error.message);
+    input.focus();
+  } finally {
+    button.disabled = false;
+  }
+}
+
 function showPassphraseScreen(message = '') {
+  $('#guest-screen').hidden = true;
   state.passphraseRequired = true;
   state.passphraseUnlocked = false;
   state.account = null;
@@ -186,6 +217,7 @@ function showPassphraseScreen(message = '') {
 }
 
 function showIpScreen(message = '') {
+  $('#guest-screen').hidden = true;
   state.account = null;
   state.accountReady = false;
   $('#ip-screen').hidden = false;
@@ -219,6 +251,11 @@ function showIpScreen(message = '') {
 async function loadSession() {
   const session = await request('/session');
   state.authMode = session.authMode || 'account';
+  if (state.authMode === 'off') {
+    if (session.guestName) setAccount({ ...guestAccount, username: session.guestName });
+    else showGuestScreen();
+    return;
+  }
   state.passphraseRequired = session.passphraseRequired === true;
   state.passphraseUnlocked = session.passphraseUnlocked !== false;
   state.ipRegistered = session.ipRegistered === true;
@@ -239,7 +276,7 @@ async function loadSession() {
     ? session.account
     : state.authMode === 'ip'
       ? { ...guestAccount, id: state.ipAddress, username: state.ipName || 'Guest', role: session.ipRole || 'member' }
-      : state.authMode === 'off' ? guestAccount : { ...guestAccount, username: 'Shared drive' };
+      : { ...guestAccount, username: 'Shared drive' };
   setAccount(account);
 }
 
@@ -564,7 +601,8 @@ window.addEventListener('resize', () => setPreviewWidth(previewWidth));
 async function handlePreviewAuth(response) {
   if (response.status !== 401) return false;
   const data = await response.json().catch(() => ({}));
-  if (data.passphraseRequired) showPassphraseScreen('Enter the passphrase to continue.');
+  if (data.guestNameRequired) showGuestScreen(data.error);
+  else if (data.passphraseRequired) showPassphraseScreen('Enter the passphrase to continue.');
   else if (data.ipRequired) loadSession().catch(() => {});
   else if (data.signInRequired || state.account) setAccount(null);
   return true;
@@ -1607,6 +1645,7 @@ function openAdmin() {
   refreshAdmin();
 }
 
+$('#guest-form').addEventListener('submit', submitGuestName);
 $('#passphrase-form').addEventListener('submit', submitPassphrase);
 $('#ip-register-form').addEventListener('submit', submitIpRegister);
 $('#ip-login-form').addEventListener('submit', submitIpLogin);
@@ -1801,7 +1840,7 @@ try {
 loadSession().catch((error) => {
   if (state.authMode === 'passphrase') showPassphraseScreen(error.message);
   else if (state.authMode === 'ip') showIpScreen(error.message);
-  else if (state.authMode === 'off') setAccount(guestAccount);
+  else if (state.authMode === 'off') showGuestScreen(error.message);
   else {
     setAccount(null);
     showError($('#access-error'), error.message);

@@ -91,7 +91,7 @@ Edit `config.jsonc` in the project folder and restart the server:
   - `passphrase`: everyone enters one shared passphrase before using the drive. Set `PASSPHRASE` in `.env` (copy `.env.example`) or in the environment. The server refuses to start if the passphrase is missing. `.env` is ignored by Git.
   - `ip`: the first visit from a network address registers a friendly name and passphrase. Later visits from the same address only ask for that passphrase. Sessions are tied to the address, so a different address registers its own name and passphrase.
 
-  - `off`: anyone who can reach the server can open and modify the drive as a guest. Set `"auth-mode": "off"` to use this on a trusted network.
+  - `off`: anyone who can reach the server can open and modify the drive as a guest. The first visit from an address asks for a friendly name and remembers it by IP. Addresses already named in IP mode keep their existing names. Set `"auth-mode": "off"` to use this on a trusted network.
 
 Restart the server after changing the file.
 

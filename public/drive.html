@@ -29,6 +29,17 @@
     <div id="access-actions" class="account-controls"></div>
     <p id="access-error" class="error" role="alert" hidden></p>
   </main>
+  <main id="guest-screen" class="access-screen" hidden>
+    <div>
+      <h1>Welcome to the shared drive</h1>
+      <p>Choose a friendly name to show on files you add from this network address.</p>
+    </div>
+    <form id="guest-form" class="dialog-form">
+      <label>Friendly name<input id="guest-name-input" name="name" maxlength="40" autocomplete="nickname" required></label>
+      <button class="button primary" type="submit">Open drive</button>
+    </form>
+    <p id="guest-error" class="error" role="alert" hidden></p>
+  </main>
   <main id="passphrase-screen" class="access-screen" hidden>
     <div>
       <h1>Locked drive</h1>
