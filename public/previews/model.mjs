@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { fetchPreview, showMessage } from './common.mjs';
 import { createFlyControls } from './fly-controls.mjs';
+import { createOutdoorPreview } from './model-outdoors.mjs';
 
 export const blankTexture = '/blank.png';
 
@@ -93,7 +94,7 @@ function createViewer(subject, name, missing, neutralLighting) {
 
   const hint = document.createElement('p');
   hint.className = 'model-hint';
-  hint.textContent = 'Drag to rotate · Scroll to zoom';
+  hint.textContent = 'Drag to rotate · Scroll to zoom · Ctrl+scroll for FOV';
   container.append(hint);
 
   if (missing.size) {
@@ -122,7 +123,6 @@ function createViewer(subject, name, missing, neutralLighting) {
   scene.add(subject);
   const camera = new THREE.PerspectiveCamera(42, 1, 0.01, 1000);
   const controls = new OrbitControls(camera, canvas);
-  const fly = createFlyControls(camera, canvas);
   controls.enableDamping = true;
   controls.dampingFactor = 0.08;
   controls.enablePan = false;
@@ -137,16 +137,15 @@ function createViewer(subject, name, missing, neutralLighting) {
       if (object.isLight) object.intensity = 0;
     });
   }
-  scene.add(new THREE.HemisphereLight(0xffffff, neutralLighting ? 0x404040 : 0x3c4050, neutralLighting ? 0.8 : 2.1));
+  const ambient = new THREE.HemisphereLight(0xffffff, neutralLighting ? 0x404040 : 0x3c4050, neutralLighting ? 0.8 : 2.1);
   const key = new THREE.DirectionalLight(0xffffff, neutralLighting ? 1.6 : 2.8);
   key.position.set(4, 6, 5);
-  scene.add(key);
   const fill = new THREE.DirectionalLight(neutralLighting ? 0xffffff : 0x9db8ff, neutralLighting ? 0.55 : 1.1);
   fill.position.set(-5, 2, -2);
-  scene.add(fill);
   const rim = new THREE.DirectionalLight(neutralLighting ? 0xffffff : 0xffd8aa, neutralLighting ? 0.55 : 1.4);
   rim.position.set(-2, 4, -6);
-  scene.add(rim);
+  const studioLights = [ambient, key, fill, rim];
+  scene.add(...studioLights);
 
   let disposed = false;
 
@@ -163,7 +162,20 @@ function createViewer(subject, name, missing, neutralLighting) {
   observer.observe(canvasHost);
 
   subject.position.sub(sphere.center);
+  subject.updateMatrixWorld(true);
+  const groundPlane = box.min.y - sphere.center.y;
+  const groundMeshes = [];
+  subject.traverseVisible((object) => {
+    if (object.isMesh) groundMeshes.push(object);
+  });
+  const floorRay = new THREE.Raycaster(new THREE.Vector3(), new THREE.Vector3(0, -1, 0));
+  const floorHits = [];
   const radius = sphere.radius;
+  const gridClearance = Math.min(radius * 0.0001, 0.001);
+  const groundGrid = new THREE.GridHelper(radius * 2.4, 24, 0x7cb6c4, 0x526570);
+  groundGrid.position.y = groundPlane + gridClearance;
+  groundGrid.visible = false;
+  scene.add(groundGrid);
   const distance = radius / Math.sin(THREE.MathUtils.degToRad(camera.fov) / 2) * 1.15;
   const direction = new THREE.Vector3(0.8, 0.55, 1).normalize();
   const home = direction.multiplyScalar(distance);
@@ -176,6 +188,7 @@ function createViewer(subject, name, missing, neutralLighting) {
   controls.minDistance = radius * 1.15;
   controls.maxDistance = radius * 12;
   controls.update();
+  const outdoors = createOutdoorPreview(scene, renderer, camera, radius, groundPlane, subject, groundMeshes, studioLights);
 
   const toolbar = document.createElement('div');
   toolbar.className = 'model-controls';
@@ -184,10 +197,48 @@ function createViewer(subject, name, missing, neutralLighting) {
   toolbar.innerHTML = `
     <button class="text-button" type="button" aria-pressed="true">Orbit</button>
     <button class="text-button" type="button" aria-pressed="false">Fly</button>
-    <label hidden>Speed <input type="range" min="0.1" max="4" step="0.1" value="1"></label>`;
+    <span class="model-gravity" role="status" hidden>Gravity on</span>
+    <label hidden>Speed <input type="range" min="0.1" max="20" step="0.1" value="1"> <output aria-hidden="true">1.0×</output></label>`;
   const [orbitButton, flyButton] = toolbar.querySelectorAll('button');
   const speed = toolbar.querySelector('input');
   const speedLabel = toolbar.querySelector('label');
+  const speedOutput = toolbar.querySelector('output');
+  const gravityStatus = toolbar.querySelector('.model-gravity');
+  let boost = 1;
+  function updateSpeedDisplay() {
+    speedOutput.value = (speed.valueAsNumber * boost).toFixed(1) + '×';
+  }
+  speed.addEventListener('input', updateSpeedDisplay);
+  const fly = createFlyControls(camera, canvas, {
+    findFloor(position, reach) {
+      floorRay.ray.origin.copy(position);
+      floorRay.far = reach;
+      floorHits.length = 0;
+      floorRay.intersectObjects(groundMeshes, false, floorHits);
+      return floorHits[0]?.point.y ?? groundPlane;
+    },
+    onGridToggle() {
+      groundGrid.visible = !groundGrid.visible;
+    },
+    onWorldToggle: outdoors.toggleWorld,
+    onSunToggle: outdoors.toggleSun,
+    onGravityChange(enabled, height, groundOffset) {
+      const level = groundPlane + groundOffset;
+      groundGrid.position.y = level + gridClearance;
+      outdoors.setGroundLevel(level);
+      gravityStatus.hidden = !enabled;
+      const sign = groundOffset >= 0 ? '+' : '';
+      gravityStatus.textContent = `Gravity · Eye ${height.toFixed(1)} m · Ground ${sign}${groundOffset.toFixed(1)} m`;
+    },
+    onSpeedStep(direction) {
+      speed.stepUp(direction * Math.max(1, Math.round(speed.valueAsNumber * 1.5)));
+      updateSpeedDisplay();
+    },
+    onBoostChange(multiplier) {
+      boost = multiplier;
+      updateSpeedDisplay();
+    },
+  });
   container.append(toolbar);
   const orbitPosition = new THREE.Vector3();
   const orbitNear = camera.near;
@@ -196,7 +247,10 @@ function createViewer(subject, name, missing, neutralLighting) {
     if (flying === enabled) return;
     flying = enabled;
     if (enabled) orbitPosition.copy(camera.position);
-    else camera.position.copy(orbitPosition);
+    else {
+      camera.position.copy(orbitPosition);
+      groundGrid.visible = false;
+    }
     camera.near = enabled ? Math.max(radius / 10000, 0.00001) : orbitNear;
     camera.updateProjectionMatrix();
     controls.enabled = !enabled;
@@ -205,8 +259,8 @@ function createViewer(subject, name, missing, neutralLighting) {
     flyButton.setAttribute('aria-pressed', String(enabled));
     speedLabel.hidden = !enabled;
     hint.textContent = enabled
-      ? 'WASD to move · Q down · E up · Click or drag to look'
-      : 'Drag to rotate · Scroll to zoom';
+      ? 'WASD to move · Q down · E up · Right-click to capture · Scroll for speed while captured · G toggles gravity · V ground grid · Ctrl+V grass and sky · L sun and shadows · Space to jump · Numpad +/− for eye height · Ctrl+Numpad +/− for ground level · Ctrl+scroll for FOV · Shift doubles speed · Esc releases'
+      : 'Drag to rotate · Scroll to zoom · Ctrl+scroll for FOV';
   }
   orbitButton.addEventListener('click', () => setFlyMode(false));
   flyButton.addEventListener('click', () => setFlyMode(true));
@@ -216,8 +270,9 @@ function createViewer(subject, name, missing, neutralLighting) {
     if (disposed) return;
     const delta = lastFrame ? Math.min((time - lastFrame) / 1000, 0.05) : 0;
     lastFrame = time;
-    if (flying) fly.update(delta * radius * 0.6 * speed.valueAsNumber);
+    if (flying) fly.update(delta * radius * 0.6 * speed.valueAsNumber, delta);
     else controls.update();
+    outdoors.update();
     renderer.render(scene, camera);
   });
   resize();
@@ -232,6 +287,8 @@ function createViewer(subject, name, missing, neutralLighting) {
       fly.dispose();
       controls.dispose();
       disposeModel(subject);
+      groundGrid.dispose();
+      outdoors.dispose();
       renderer.dispose();
     },
   };

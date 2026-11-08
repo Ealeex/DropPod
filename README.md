@@ -49,7 +49,7 @@ For a self-contained release, ship native tools and their required libraries in 
 
 ### Blender previews
 
-The 3D preview opens in **Orbit** mode. Choose **Fly** for WASD movement, Q to descend and E to rise, and adjustable speed. Click the scene to capture the mouse or drag to look around. Press Escape to release the mouse.
+The 3D preview opens in **Orbit** mode. Choose **Fly** for WASD movement, Q to descend and E to rise, and adjustable speed. Right-click the scene to capture the mouse or drag to look around. Press Escape to release the mouse. Use Ctrl+scroll over the scene to change the field of view.
 
 **Windows with Ubuntu WSL.** Open Ubuntu on x86-64 and install Bubblewrap and [uv](https://docs.astral.sh/uv/getting-started/installation/). From the FireSend project directory inside Ubuntu, run:
 
@@ -68,7 +68,7 @@ docker build --platform linux/amd64 -t firesend-blender-preview ./tools/blender-
 
 Set `BLENDER_PREVIEW_IMAGE=firesend-blender-preview` in `.env` and restart FireSend. Set `DOCKER_PATH` if Docker is outside the server’s PATH. ARM hosts need Docker’s AMD64 emulation for this image.
 
-FireSend converts the active scene to GLB on the first preview and caches it for later views. Pack textures into the Blender file before uploading. The converter scales oversized packed images to a maximum of 2048 pixels on their longest edge in the preview. Blender previews use neutral lighting for inspection. Procedural materials can look different from the Blender render. The 3D viewer opens in Orbit mode. Switch to **Fly** to move with WASD, descend with Q and rise with E, and look around by clicking or dragging. The speed slider adjusts movement for the current scene. Both runners receive the upload through a pipe, disable automatic Blender scripts, and limit conversion to 60 seconds and 128 MiB each for the upload and resulting GLB.
+FireSend converts the active scene to GLB on the first preview and caches it for later views. Pack textures into the Blender file before uploading. The converter scales oversized packed images to a maximum of 2048 pixels on their longest edge in the preview. Blender previews use neutral lighting for inspection. Procedural materials can look different from the Blender render. The 3D viewer opens in Orbit mode. Switch to **Fly** to move with WASD, descend with Q and rise with E, and look around by right-clicking to capture the mouse or by dragging. Adjust movement speed with the slider or scroll while the mouse is captured. With the mouse released, hold left click to scroll-adjust speed. Press V to toggle the ground grid, Ctrl+V to toggle grass and sky, or L to toggle sunlight and shadows. Press G while captured to toggle gravity and move at about 1.8 metres above the surface below you. While gravity is on, press Space to jump, Numpad +/− to change eye height, or Ctrl+Numpad +/− to offset ground level. The slider ranges from 0.1× to 20×. Hold Shift to double the current speed. Both runners receive the upload through a pipe, disable automatic Blender scripts, and limit conversion to 60 seconds and 128 MiB each for the upload and resulting GLB.
 
 ## Configuration
 

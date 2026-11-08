@@ -374,6 +374,8 @@ tbody tr.is-drop-target { background: var(--accent-soft); outline: 1px solid var
 .model-controls button[aria-pressed="true"] { color: var(--accent); }
 .model-controls label { display: flex; align-items: center; gap: 4px; font-size: .76rem; }
 .model-controls input { width: 70px; accent-color: var(--accent); }
+.model-gravity { color: var(--accent); font-size: .76rem; }
+.model-controls output { min-width: 5ch; font-variant-numeric: tabular-nums; }
 .model-hint, .model-warning {
   position: absolute;
   z-index: 1;
