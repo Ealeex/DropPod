@@ -48,7 +48,7 @@
     </div>
     <form id="ip-register-form" class="dialog-form" hidden>
       <label>Friendly name<input id="ip-name-input" name="name" maxlength="40" autocomplete="nickname" required></label>
-      <label>Passphrase<input id="ip-register-passphrase" name="passphrase" type="password" minlength="6" autocomplete="new-password" required></label>
+      <label>Passphrase<input id="ip-register-passphrase" name="passphrase" type="password" minlength="3" autocomplete="new-password" required></label>
       <button class="button primary" type="submit">Register this network</button>
     </form>
     <form id="ip-login-form" class="dialog-form" hidden>
@@ -57,8 +57,8 @@
     </form>
     <form id="ip-change-form" class="dialog-form" hidden>
       <label>Temporary passphrase<input name="currentPassword" type="password" autocomplete="current-password" required></label>
-      <label>New passphrase<input name="newPassword" type="password" minlength="6" maxlength="128" autocomplete="new-password" required></label>
-      <label>Confirm new passphrase<input name="confirmPassword" type="password" minlength="6" maxlength="128" autocomplete="new-password" required></label>
+      <label>New passphrase<input name="newPassword" type="password" minlength="3" maxlength="128" autocomplete="new-password" required></label>
+      <label>Confirm new passphrase<input name="confirmPassword" type="password" minlength="3" maxlength="128" autocomplete="new-password" required></label>
       <div class="dialog-actions">
         <button id="ip-change-back" class="button" type="button">Back to sign-in</button>
         <button class="button primary" type="submit">Save passphrase</button>

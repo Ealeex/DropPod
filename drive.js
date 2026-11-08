@@ -24,6 +24,7 @@ const ipCookie = 'firesend_ip';
 const sessionDuration = 7 * 24 * 60 * 60 * 1000;
 const usernamePattern = /^[a-zA-Z0-9][a-zA-Z0-9_.-]{2,31}$/;
 const friendlyNamePattern = /^[^\x00-\x1f\x7f/\\]{1,40}$/;
+const ipPassphraseMinimum = 3;
 const authWindow = 15 * 60 * 1000;
 
 const previewFormats = new Map(Object.entries({
@@ -655,8 +656,8 @@ function createDriveRouter({ data, uploads, upload, removeBlob, authMode = 'acco
     }
     const name = friendlyName(req.body?.name);
     const provided = req.body?.passphrase;
-    if (!name || typeof provided !== 'string' || provided.length < 6 || provided.length > 128) {
-      return res.status(400).json({ error: 'Choose a name of up to 40 characters and a passphrase of at least 6 characters.' });
+    if (!name || typeof provided !== 'string' || provided.length < ipPassphraseMinimum || provided.length > 128) {
+      return res.status(400).json({ error: 'Choose a name of up to 40 characters and a passphrase with 3–128 characters.' });
     }
     const passphraseHash = await hashPassword(provided);
     const inserted = db.prepare(`
@@ -739,7 +740,7 @@ function createDriveRouter({ data, uploads, upload, removeBlob, authMode = 'acco
     const authorized = ipMode ? hasIpSession(req) : passphraseRequired ? hasPassphrase(req) : req.driveAccount;
     if (!authorized) return requireAccess(req, res, () => res.sendStatus(401));
     const { currentPassword, newPassword } = req.body || {};
-    const minimum = accountsEnabled ? 10 : 6;
+    const minimum = ipMode ? ipPassphraseMinimum : accountsEnabled ? 10 : 6;
     const label = accountsEnabled ? 'password' : 'passphrase';
     if (typeof currentPassword !== 'string' || typeof newPassword !== 'string'
       || newPassword.length < minimum || newPassword.length > 128) {
@@ -1196,8 +1197,8 @@ function createDriveRouter({ data, uploads, upload, removeBlob, authMode = 'acco
     if (!target) return res.status(404).json({ error: 'Account not found.' });
     if (target.role === 'admin') return res.status(400).json({ error: 'Change your own passphrase in Settings.' });
     const { passphrase } = req.body || {};
-    if (typeof passphrase !== 'string' || passphrase.length < 6 || passphrase.length > 128) {
-      return res.status(400).json({ error: 'Choose a temporary passphrase with 6–128 characters.' });
+    if (typeof passphrase !== 'string' || passphrase.length < ipPassphraseMinimum || passphrase.length > 128) {
+      return res.status(400).json({ error: 'Choose a temporary passphrase with 3–128 characters.' });
     }
     const hash = await hashPassword(passphrase);
     if (!hasIpSession(req)) return res.status(401).json({ error: 'Sign in again.', ipRequired: true });

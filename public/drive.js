@@ -1475,7 +1475,7 @@ function openSettings() {
 }
 
 function openPasswordSettings(credential) {
-  const minimum = state.authMode === 'account' ? 10 : 6;
+  const minimum = state.authMode === 'ip' ? 3 : state.authMode === 'account' ? 10 : 6;
   showDialog(`Change ${credential}`, `
     <form class="dialog-form">
       ${state.authMode === 'passphrase' ? '<p class="dialog-copy">This updates the passphrase for everyone and signs out other sessions.</p>' : ''}
@@ -1502,7 +1502,7 @@ function editIpAccount(account, resetPassphrase) {
     <form class="dialog-form">
       <p id="edit-ip-account" class="dialog-copy"></p>
       ${resetPassphrase
-        ? '<label>Temporary passphrase<input name="value" type="password" minlength="6" maxlength="128" autocomplete="new-password" required autofocus></label>'
+        ? '<label>Temporary passphrase<input name="value" type="password" minlength="3" maxlength="128" autocomplete="new-password" required autofocus></label>'
         : '<label>Friendly name<input name="value" maxlength="40" required autofocus></label>'}
       <div class="dialog-actions">
         <button class="button cancel-dialog" type="button">Back</button>
