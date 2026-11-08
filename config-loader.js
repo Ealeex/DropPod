@@ -2,7 +2,7 @@ const path = require('node:path');
 const { readFileSync } = require('node:fs');
 
 const themes = new Set(['vista', 'graphite']);
-const authModes = new Set(['account', 'passphrase', 'ip']);
+const authModes = new Set(['account', 'passphrase', 'ip', 'off']);
 
 function stripJsonComments(source) {
   let result = '';

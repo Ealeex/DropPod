@@ -126,6 +126,7 @@ function renderAccount() {
   const settings = action('Settings', 'settings', openSettings);
   settings.setAttribute('aria-haspopup', 'dialog');
   controls.append(settings);
+  if (state.authMode === 'off') return;
   controls.append(makeButton('Sign out', async () => {
     try {
       await request('/logout', { method: 'POST' });
@@ -238,7 +239,7 @@ async function loadSession() {
     ? session.account
     : state.authMode === 'ip'
       ? { ...guestAccount, id: state.ipAddress, username: state.ipName || 'Guest', role: session.ipRole || 'member' }
-      : { ...guestAccount, username: 'Shared drive' };
+      : state.authMode === 'off' ? guestAccount : { ...guestAccount, username: 'Shared drive' };
   setAccount(account);
 }
 
@@ -1441,10 +1442,10 @@ function openSettings() {
         <span>Single name field<small class="hint">One box</small></span>
       </label>
     </fieldset>
-    <fieldset class="theme-options">
+    ${state.authMode === 'off' ? '' : `<fieldset class="theme-options">
       <legend>Sign-in</legend>
       <button id="change-password" class="button" type="button">Change ${credential}</button>
-    </fieldset>`);
+    </fieldset>`}`);
   const activeTheme = document.documentElement.dataset.theme;
   for (const input of dialogBody.querySelectorAll('input[name="drive-theme"]')) {
     input.checked = input.value === activeTheme;
@@ -1470,7 +1471,7 @@ function openSettings() {
       }
     });
   }
-  $('#change-password').addEventListener('click', () => openPasswordSettings(credential));
+  $('#change-password')?.addEventListener('click', () => openPasswordSettings(credential));
   dialogBody.querySelector('input:checked').focus();
 }
 
@@ -1800,6 +1801,7 @@ try {
 loadSession().catch((error) => {
   if (state.authMode === 'passphrase') showPassphraseScreen(error.message);
   else if (state.authMode === 'ip') showIpScreen(error.message);
+  else if (state.authMode === 'off') setAccount(guestAccount);
   else {
     setAccount(null);
     showError($('#access-error'), error.message);

@@ -4,7 +4,7 @@ const { loadConfig } = require('./config-loader');
 
 const { authMode } = loadConfig();
 const identity = process.argv[2]?.trim();
-if (authMode === 'passphrase') {
+if (authMode !== 'account' && authMode !== 'ip') {
   console.error('Administrator access is available in account and IP modes.');
   process.exitCode = 1;
 } else if (!identity) {

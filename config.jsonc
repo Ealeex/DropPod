@@ -7,7 +7,8 @@
   //   "passphrase" - one shared passphrase for everyone. Set PASSPHRASE in .env.
   //   "ip"         - each network address registers a friendly name and passphrase.
   //                  Later visits from the same address only ask for the passphrase.
-  "auth-mode": "ip",
+  //   "off"        - everyone who can reach the server can use the drive.
+  "auth-mode": "passphrase",
 
   // IP addresses or CIDRs of reverse proxies allowed to forward client IPs.
   // For NGINX connecting locally over IPv4, use ["127.0.0.1"].

@@ -319,6 +319,7 @@ function itemName(input) {
 }
 
 function createDriveRouter({ data, uploads, upload, removeBlob, authMode = 'account', passphrase = '' }) {
+  const authDisabled = authMode === 'off';
   const accountsEnabled = authMode === 'account';
   const passphraseRequired = authMode === 'passphrase';
   const ipMode = authMode === 'ip';
@@ -489,7 +490,7 @@ function createDriveRouter({ data, uploads, upload, removeBlob, authMode = 'acco
   function actorName(req) {
     if (accountsEnabled) return req.driveAccount?.username || 'Unknown';
     if (ipMode) return getIpUser.get(clientIp(req))?.name || 'Unknown';
-    return 'Shared drive';
+    return authDisabled ? 'Guest' : 'Shared drive';
   }
 
   function hasPassphrase(req) {
@@ -550,6 +551,7 @@ function createDriveRouter({ data, uploads, upload, removeBlob, authMode = 'acco
   });
 
   function readSession(req, res, next) {
+    if (authDisabled) return next();
     req.driveToken = tokenFrom(req);
     if (ipMode) req.driveIpUser = getIpUser.get(clientIp(req));
     if (accountsEnabled && req.driveToken) {
@@ -686,6 +688,7 @@ function createDriveRouter({ data, uploads, upload, removeBlob, authMode = 'acco
   });
 
   router.post('/logout', (req, res) => {
+    if (authDisabled) return res.sendStatus(404);
     if (req.driveToken) removeSession.run(hashToken(req.driveToken));
     const passphraseToken = cookieFrom(req, passphraseCookie);
     if (passphraseToken) passphraseSessions.delete(passphraseToken);
@@ -737,6 +740,7 @@ function createDriveRouter({ data, uploads, upload, removeBlob, authMode = 'acco
   });
 
   router.post('/password', limitAuth, async (req, res) => {
+    if (authDisabled) return res.status(404).json({ error: 'Sign-in is disabled.' });
     const authorized = ipMode ? hasIpSession(req) : passphraseRequired ? hasPassphrase(req) : req.driveAccount;
     if (!authorized) return requireAccess(req, res, () => res.sendStatus(401));
     const { currentPassword, newPassword } = req.body || {};
