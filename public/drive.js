@@ -502,7 +502,7 @@ function downloadLink(item) {
 
 async function copyShareLink(item) {
   showDialog('Share download', `
-    <p class="dialog-copy">Anyone who can reach FireSend can use this link to download the shared item.</p>
+    <p class="dialog-copy">Anyone within the Angelstorm Network can use this link to download the shared item.</p>
     <div class="dialog-form">
       <label>Share link<input id="share-url" type="url" readonly></label>
       <p id="share-status" class="hint" role="status">Creating link…</p>
@@ -810,7 +810,7 @@ function renderFolder(previous) {
 
   const pathChanged = JSON.stringify(previous?.path) !== JSON.stringify(folder.path);
   if (pathChanged) {
-    document.title = `${folder.path.at(-1).name} · FireSend`;
+    document.title = `${folder.path.at(-1).name} · DropSpace`;
     const crumbs = $('#breadcrumbs');
     crumbs.replaceChildren();
     for (const [index, crumb] of folder.path.entries()) {
@@ -1476,14 +1476,14 @@ function openSettings() {
       </label>
     </fieldset>
     <fieldset class="theme-options">
-      <legend>Rename dialog</legend>
+      <legend>Filename Entry</legend>
       <label class="theme-option">
         <input type="radio" name="rename-mode" value="split">
-        <span>File name and extension<small class="hint">Two boxes</small></span>
+        <span>Split<small class="hint">Separate file name and extension as two fields</small></span>
       </label>
       <label class="theme-option">
         <input type="radio" name="rename-mode" value="single">
-        <span>Single name field<small class="hint">One box</small></span>
+        <span>Traditional<small class="hint">Classic single-field name entry</small></span>
       </label>
     </fieldset>
     ${state.authMode === 'off' ? '' : `<fieldset class="theme-options">
@@ -1555,7 +1555,7 @@ function editIpAccount(account, resetPassphrase) {
       </div>
     </form>`);
   $('#edit-ip-account').textContent = resetPassphrase
-    ? `Give the temporary passphrase to ${account.username}. They’ll use it to sign in and choose a new one.`
+    ? `Give the temporary passphrase to ${account.username}. They will use it to sign in and choose a new one.`
     : `Change the name shown for ${account.ip}.`;
   if (!resetPassphrase) dialogBody.querySelector('input[name="value"]').value = account.username;
   $('.cancel-dialog').addEventListener('click', openAdmin);

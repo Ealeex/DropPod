@@ -76,7 +76,7 @@ svg { width: 17px; height: 17px; flex: none; fill: none; stroke: currentColor; s
   border-color: var(--accent);
   background: var(--accent-soft);
 }
-.button.primary:hover:not(:disabled) { color: var(--page); background: var(--accent); }
+.button.primary:hover:not(:disabled) { color: var(--accent); background: var(--accent); }
 .button:disabled { color: var(--muted); background: var(--well); }
 .icon-button { width: 36px; min-height: 36px; padding: 0; background: transparent; }
 .text-button { padding-inline: 4px; border-color: transparent; background: transparent; color: var(--accent); }
