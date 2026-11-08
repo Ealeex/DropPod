@@ -8,7 +8,7 @@
   //   "ip"         - each network address registers a friendly name and passphrase.
   //                  Later visits from the same address only ask for the passphrase.
   //   "off"        - each network address chooses a friendly name without a passphrase.
-  "auth-mode": "passphrase",
+  "auth-mode": "account",
 
   // IP addresses or CIDRs of reverse proxies allowed to forward client IPs.
   // For NGINX connecting locally over IPv4, use ["127.0.0.1"].

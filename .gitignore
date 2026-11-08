@@ -4,3 +4,4 @@ node_modules/
 WISHLIST/
 /tools/ffmpeg/
 /tools/blender-runtime/
+/config.jsonc

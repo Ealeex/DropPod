@@ -1,5 +1,5 @@
 const path = require('node:path');
-const { readFileSync } = require('node:fs');
+const { constants, copyFileSync, readFileSync } = require('node:fs');
 
 const themes = new Set(['vista', 'graphite']);
 const authModes = new Set(['account', 'passphrase', 'ip', 'off']);
@@ -87,13 +87,28 @@ function stripTrailingCommas(source) {
   return result;
 }
 
+function readConfig() {
+  const configPath = path.join(__dirname, 'config.jsonc');
+  try {
+    return readFileSync(configPath, 'utf8');
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+  }
+  try {
+    copyFileSync(path.join(__dirname, 'config.example.jsonc'), configPath, constants.COPYFILE_EXCL);
+  } catch (error) {
+    if (error.code !== 'EEXIST') throw error;
+  }
+  return readFileSync(configPath, 'utf8');
+}
+
 function loadConfig() {
   let raw = {};
   try {
-    const source = readFileSync(path.join(__dirname, 'config.jsonc'), 'utf8');
+    const source = readConfig();
     raw = JSON.parse(stripTrailingCommas(stripJsonComments(source)));
   } catch (error) {
-    if (error.code !== 'ENOENT') console.error('Could not read config.jsonc:', error.message);
+    console.error('Could not load config.jsonc:', error.message);
   }
 
   if (raw['auth-mode'] !== undefined && !authModes.has(raw['auth-mode'])) {

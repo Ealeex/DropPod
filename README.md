@@ -72,7 +72,7 @@ FireSend converts the active scene to GLB on the first preview and caches it for
 
 ## Configuration
 
-Edit `config.jsonc` in the project folder and restart the server:
+On first startup, DropPod creates a commented `config.jsonc` from `config.example.jsonc` if the local file is missing. Git ignores `config.jsonc`. Edit it in the project folder and restart the server:
 
 ```jsonc
 {
