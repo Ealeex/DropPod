@@ -259,7 +259,7 @@ function createViewer(subject, name, missing, neutralLighting) {
     flyButton.setAttribute('aria-pressed', String(enabled));
     speedLabel.hidden = !enabled;
     hint.textContent = enabled
-      ? 'WASD to move · Q down · E up · Right-click to capture · Scroll for speed while captured · G toggles gravity · V ground grid · Ctrl+V grass and sky · L sun and shadows · Space to jump · Numpad +/− for eye height · Ctrl+Numpad +/− for ground level · Ctrl+scroll for FOV · Shift doubles speed · Esc releases'
+      ? 'WASD to move · Q down · E up · Right-click to capture · Scroll for speed while captured · G toggles gravity · V ground grid · Space to jump · Numpad +/− for eye height · Ctrl+Numpad +/− for ground level · Ctrl+scroll for FOV · Shift doubles speed · Esc releases'
       : 'Drag to rotate · Scroll to zoom · Ctrl+scroll for FOV';
   }
   orbitButton.addEventListener('click', () => setFlyMode(false));

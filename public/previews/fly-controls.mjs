@@ -81,17 +81,22 @@ export function createFlyControls(camera, canvas, { onSpeedStep, onBoostChange, 
       adjustHeight(event.code === 'NumpadAdd' ? 1 : -1, event.ctrlKey);
       return;
     }
-    if (event.code === 'KeyV') {
-      const toggle = event.ctrlKey ? onWorldToggle : onGridToggle;
-      if (!toggle) return;
-      event.preventDefault();
-      if (!event.repeat) toggle();
+    if (event.ctrlKey) {
+      if (event.shiftKey) {
+        const toggle = {
+          NumpadMultiply: onWorldToggle,
+          NumpadDivide: onSunToggle,
+        }[event.code];
+        if (toggle) {
+          event.preventDefault();
+          if (!event.repeat) toggle();
+        }
+      }
       return;
     }
-    if (event.ctrlKey) return;
-    if (event.code === 'KeyL' && onSunToggle) {
+    if (event.code === 'KeyV' && onGridToggle) {
       event.preventDefault();
-      if (!event.repeat) onSunToggle();
+      if (!event.repeat) onGridToggle();
       return;
     }
     if (event.code === 'KeyG' && findFloor && document.pointerLockElement === canvas) {
